@@ -2,3 +2,5 @@ langchain>=1.2.9
 langgraph>=1.0.8
 langchain-openai==1.1.10
 pytest>=7.0.0
+pytest-env==1.6.0
+python-dotenv==1.2.2
