@@ -4,7 +4,11 @@ from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
 
 from .tools import (
-    get_weather
+    get_weather,
+    read_file,
+    write_file,
+    ls,
+    bash
 )
 from .prompt import construct_system_prompt
 
@@ -28,5 +32,11 @@ def get_agent():
     return create_agent(
         model=llm,
         system_prompt=construct_system_prompt(),
-        tools=[get_weather]
+        tools=[
+            get_weather,
+            read_file,
+            write_file,
+            ls,
+            bash
+        ]
     )
