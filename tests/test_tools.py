@@ -25,7 +25,7 @@ def test_write_file() -> None:
 def test_ls() -> None:
     path = str(Path(__file__).parent / 'file')
     result = ls(path)
-    assert result.__len__() == 2
+    assert result.__len__() == 3
 
 def test_bash_echo_test() -> None:
     result = bash("echo 'test'")
@@ -34,4 +34,4 @@ def test_bash_echo_test() -> None:
 def test_bash_ls() -> None:
     path = str(Path(__file__).parent / 'file')
     result = bash(f"ls {path}")
-    assert result == "a.txt\nb.txt\n"
+    assert result == "a.txt\nb.txt\nc.txt\n"
