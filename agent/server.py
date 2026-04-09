@@ -9,7 +9,10 @@ from .tools import (
     read_file,
     write_file,
     ls,
-    bash
+    bash,
+    http_request,
+    http_get,
+    http_post
 )
 from .prompt import construct_system_prompt
 
@@ -40,7 +43,10 @@ def get_agent():
             read_file,
             write_file,
             ls,
-            bash
+            bash,
+            http_request,
+            http_get,
+            http_post
         ],
         checkpointer=memory
     )
