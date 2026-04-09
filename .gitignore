@@ -6,3 +6,4 @@
 /.idea/
 .idea
 .local.env
+tests/snake-game/
