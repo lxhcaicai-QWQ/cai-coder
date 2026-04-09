@@ -2,6 +2,7 @@ import os
 
 from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
+from langgraph.checkpoint.memory import InMemorySaver
 
 from .tools import (
     get_weather,
@@ -28,6 +29,8 @@ llm = ChatOpenAI(
 
 #==================================
 
+memory = InMemorySaver()
+
 def get_agent():
     return create_agent(
         model=llm,
@@ -38,5 +41,6 @@ def get_agent():
             write_file,
             ls,
             bash
-        ]
+        ],
+        checkpointer=memory
     )
