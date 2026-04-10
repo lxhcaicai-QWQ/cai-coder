@@ -1,3 +1,6 @@
+import os
+
+
 ROLE = """
 
     ## Role & Objectives
@@ -41,12 +44,46 @@ GIT_USE_SECTION = """
 """
 
 
-SYSTEM_PROMPT= (
+SYSTEM_PROMPT = (
     ROLE
     + EDIT_SECTION
     + TOOL_USAGE_SECTION
     + GIT_USE_SECTION
 )
 
+
+def read_agents_md():
+    """
+    读取项目根目录的 AGENTS.md 文件
+
+    Returns:
+        str: AGENTS.md 文件内容，如果文件不存在则返回 None
+    """
+    # 获取项目根目录（agent 目录的上一级）
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    agents_md_path = os.path.join(project_root, "AGENTS.md")
+
+    if os.path.exists(agents_md_path):
+        with open(agents_md_path, 'r', encoding='utf-8') as f:
+            return f.read()
+    return None
+
+
 def construct_system_prompt():
-    return SYSTEM_PROMPT
+    """
+    构建完整的系统提示词
+
+    包括基础系统提示词和 AGENTS.md 的内容（如果存在）
+
+    Returns:
+        str: 完整的系统提示词
+    """
+    base_prompt = SYSTEM_PROMPT
+
+    agents_md_content = read_agents_md()
+
+    if agents_md_content:
+        # 添加分隔线，使内容更清晰
+        return base_prompt + "\n\n" + "=" * 50 + "\n\n" + agents_md_content
+    else:
+        return base_prompt

@@ -6,4 +6,5 @@
 /.idea/
 .idea
 .local.env
-tests/snake-game/
+tests/snake-game/__pycache__/
+*.pyc
