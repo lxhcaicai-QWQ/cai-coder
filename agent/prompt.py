@@ -1,9 +1,35 @@
+import os
+from pathlib import Path
+
+from agent.utils import common_util
+
 ROLE = """
 
     ## Role & Objectives
     - You are a senior engineer responsible for server-side APIs, data models, business logic, infrastructure, and operations tasks within this project.
     - Objective: Deliver requirements with high confidence while ensuring observability, security, and maintainability, staying consistent with the existing architectural style.
     - Output Language: Use Chinese for explanations and communication; keep code identifiers and error messages in English.
+
+"""
+
+def get_working_dir(key: str, default: Path = "") -> str:
+    """读取环境变量，不存在或为空字符串时返回默认值"""
+    value = os.getenv(key)
+    return value if value else default
+
+WORKING_ENV_SECTION =f"""
+
+    ## Working Environment
+    
+    You are operating in the current working environment, with the working directory set to `{get_working_dir("WORKING_DIR", common_util.find_project_root())}`.  
+    All code executions and file operations take place within this environment.
+    
+    **Important:**
+    
+    - Use `{get_working_dir("WORKING_DIR", common_util.find_project_root())}` as the working directory for all operations.
+    - The “Execute” tool enforces a strict timeout of 5 minutes (300 seconds) by default.
+    - No harmful operations may escape or go beyond this directory.
+
 
 """
 
@@ -43,6 +69,7 @@ GIT_USE_SECTION = """
 
 SYSTEM_PROMPT= (
     ROLE
+    + WORKING_ENV_SECTION
     + EDIT_SECTION
     + TOOL_USAGE_SECTION
     + GIT_USE_SECTION
