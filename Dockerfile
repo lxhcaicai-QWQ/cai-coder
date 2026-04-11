@@ -9,11 +9,12 @@ ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 
 # 复制依赖文件（先复制依赖文件以利用 Docker 缓存）
-COPY requirements.txt .
+COPY pyproject.toml .
 
 RUN pip install --no-cache-dir \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
-    --compile -r requirements.txt
+    --compile \
+    -e ".[dev]"
 
 # 复制项目代码
 COPY . .
