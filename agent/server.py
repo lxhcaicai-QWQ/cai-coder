@@ -4,6 +4,7 @@ from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
 
+from .middleware import SkillMiddleware
 from .tools import (
     get_weather,
     read_file,
@@ -48,5 +49,6 @@ def get_agent():
             http_get,
             http_post
         ],
+        middleware=[SkillMiddleware()],
         checkpointer=memory
     )

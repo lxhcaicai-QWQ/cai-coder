@@ -12,7 +12,7 @@ class SkillRecord:
     name: str
     description: str
     location: Path  # SKILL.md 绝对路径
-    body: Optional[str] = None  # 激活时再读也可以；这里支持在发现时就读入
+    content: Optional[str] = None  # 激活时再读也可以；这里支持在发现时就读入
 
     @property
     def skill_dir(self) -> Path:
@@ -95,7 +95,7 @@ def parse_skill_md(
         name=name,
         description=description,
         location=skill_md_path,
-        body=body_part if read_body_now else None,
+        content=body_part if read_body_now else None,
     )
     return record
 
