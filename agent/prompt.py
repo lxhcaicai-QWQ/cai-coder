@@ -17,19 +17,33 @@ def get_working_dir(key: str, default: Path = "") -> str:
     value = os.getenv(key)
     return value if value else default
 
-WORKING_ENV_SECTION =f"""
+WORKING_ENV_SECTION ="""
 
     ## Working Environment
     
-    You are operating in the current working environment, with the working directory set to `{get_working_dir("WORKING_DIR", common_util.find_project_root())}`.  
+    You are operating in the current working environment, with the working directory set to `{working_dir}`.  
     All code executions and file operations take place within this environment.
     
     **Important:**
     
-    - Use `{get_working_dir("WORKING_DIR", common_util.find_project_root())}` as the working directory for all operations.
+    - Use `{working_dir}` as the working directory for all operations.
     - The “Execute” tool enforces a strict timeout of 5 minutes (300 seconds) by default.
     - No harmful operations may escape or go beyond this directory.
 
+
+"""
+
+PROJECT_SETUP_SECTION = """
+
+    ## Project Setup
+    
+    Before starting any task, follow these steps in order:
+    
+    Read and Follow AGENTS.md — Check if “AGENTS.md” (‘{working_dir}/AGENTS.md’) exists in the project root. 
+    If it exists, you must read it immediately and treat its contents as mandatory rules for this project. AGENTS.md contains project-specific conventions, coding standards, and constraints that override default behaviors. 
+    Violating AGENTS.md rules is equivalent to violating the system prompt. If AGENTS.md does not exist, skip this step.
+    
+    You must complete all these steps before proceeding with any other work.
 
 """
 
@@ -70,10 +84,13 @@ GIT_USE_SECTION = """
 SYSTEM_PROMPT= (
     ROLE
     + WORKING_ENV_SECTION
+    + PROJECT_SETUP_SECTION
     + EDIT_SECTION
     + TOOL_USAGE_SECTION
     + GIT_USE_SECTION
 )
 
 def construct_system_prompt():
-    return SYSTEM_PROMPT
+    return SYSTEM_PROMPT.format(
+        working_dir = get_working_dir("WORKING_DIR", common_util.find_project_root())
+    )
