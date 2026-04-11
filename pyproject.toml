@@ -1,0 +1,9 @@
+[project]
+name = "cai-coder"
+version = "1.0.0"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+pythonpath = "."
+env_files = ".local.env"
+testpaths = ["tests"]
