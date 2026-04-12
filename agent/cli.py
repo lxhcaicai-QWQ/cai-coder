@@ -4,6 +4,7 @@ from agent import server
 
 def run():
     config = {"configurable": {"thread_id": str(uuid.uuid4())  }}
+    agent = server.get_agent()
     while True:
         content = input("> ")
         if not content.strip():
@@ -12,7 +13,6 @@ def run():
         if content.strip().lower() == "exit":
             break
 
-        agent = server.get_agent()
         for chunk in agent.stream(
                 {"messages": [{"role": "user", "content": f"{content}"}]},
                 stream_mode=["messages"],
