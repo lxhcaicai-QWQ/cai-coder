@@ -36,6 +36,6 @@ def test_render_skills_json():
 
 
 def test_middleware_load_skill():
-    result = load_skill("python-testing")
+    result = load_skill.invoke({"skill_name":"python-testing"})
     assert result is not None
     assert result.__contains__("Loaded skill: python-testing")

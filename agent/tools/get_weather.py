@@ -1,6 +1,9 @@
 import requests
 
+from langchain_core.tools import tool
 
+
+@tool
 def get_weather(location: str) -> dict:
     """Get the current weather in a location.
 

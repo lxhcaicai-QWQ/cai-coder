@@ -2,6 +2,10 @@ import os
 import platform
 import subprocess
 
+from langchain_core.tools import tool
+
+
+@tool
 def bash(command: str):
     """Execute a bash command and return the output"""
 

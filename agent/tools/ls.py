@@ -1,7 +1,9 @@
-import os
 from pathlib import Path
 
+from langchain_core.tools import tool
 
+
+@tool
 def ls(path: str):
     """List files and directories in a given path"""
     p = Path(path)

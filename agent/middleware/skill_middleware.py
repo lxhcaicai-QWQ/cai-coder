@@ -13,7 +13,7 @@ parse_skill_md
 )
 
 
-# @tool
+@tool
 def load_skill(skill_name: str) -> str:
     """Load the full content of a skill into the agent's context.
 

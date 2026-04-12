@@ -1,6 +1,9 @@
 import os
 
+from langchain_core.tools import tool
 
+
+@tool
 def write_file(file_path: str, content: str):
     """Write contents to a file"""
     parent = os.path.dirname(file_path)
