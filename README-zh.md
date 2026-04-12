@@ -20,15 +20,16 @@
 
 ## 项目简介
 
-**cai-coder** 是一个基于 **Python**、**LangChain** 和 **LangGraph** 构建的 AI 编程助手 Agent。它采用独特的 **渐进式技能加载** 机制——Agent 默认保持轻量的基础状态，只有在用户触发特定需求时才动态加载专业技能，兼顾了效率与灵活性。
+**cai-coder** 是一个基于 **Python**、**LangChain** 和 **LangGraph** 构建的 AI 编程助手 Agent。它采用独特的 **渐进式技能加载** 机制——Agent 默认保持轻量的基础状态，只有在用户触发特定需求时才动态加载专业技能，兼顾了效率与灵活性。同时支持 **MCP (Model Context Protocol)** 工具集成，可无缝扩展 Agent 能力。
 
 ## 核心特性
 
 - **渐进式技能加载** — 根据用户意图按需加载技能，保持基础 Agent 的精简与高效。
 - **丰富的内置工具集** — 支持文件读写、Shell 命令执行、HTTP 请求、天气查询等操作。
-- **中间件架构** — 通过可扩展的中间件系统（如 `SkillMiddleware`）定制 Agent 行为。
-- **对话记忆** — 基于 LangGraph 的 `InMemorySaver` 实现有状态的多轮对话。
-- **CLI 交互界面** — 提供交互式 REPL，实时响应编程需求。
+- **MCP 工具集成** — 通过 `mcp.json` 配置外部 MCP 服务器，扩展 Agent 能力。
+- **中间件架构** — 可扩展的中间件流水线：技能加载、任务追踪、工具/模型调用自动重试（指数退避）。
+- **持久化对话记忆** — 基于 LangGraph 的 `AsyncSqliteSaver` + SQLite 持久化，支持跨会话有状态对话。
+- **CLI 交互界面** — 提供异步交互式 REPL，实时响应编程需求。
 - **Docker 支持** — 开箱即用的容器化部署方案。
 
 ## 工作原理
@@ -60,6 +61,16 @@
 | `http_get` | 发送 GET 请求（快捷方法） |
 | `http_post` | 发送 POST 请求（快捷方法） |
 | `get_weather` | 查询指定位置的天气 |
+| `load_skill` | 按需加载技能的完整指令 |
+
+### 中间件流水线
+
+| 中间件 | 用途 |
+|---|---|
+| `SkillMiddleware` | 将技能描述注入系统提示词；提供 `load_skill` 工具 |
+| `TodoListMiddleware` | 管理任务追踪与进度可视化 |
+| `ToolRetryMiddleware` | 工具调用失败自动重试（最多 3 次，指数退避） |
+| `ModelRetryMiddleware` | 模型调用失败自动重试（最多 3 次，指数退避） |
 
 ## 快速开始
 
@@ -78,7 +89,7 @@ cd cai-coder
 # 安装依赖
 pip install -e .
 
-# 或安装开发依赖（pytest 等）
+# 或安装开发依赖（pytest、pytest-env、pytest-asyncio、python-dotenv）
 pip install -e ".[dev]"
 ```
 
@@ -114,6 +125,25 @@ python -m agent.cli
 > exit
 ```
 
+> CLI 使用 `AsyncSqliteSaver` + `cai-coder-sqlite.db` 实现跨会话的对话持久化。
+
+## MCP 集成
+
+cai-coder 支持 [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) 工具。在 `mcp.json` 中配置 MCP 服务器：
+
+```json
+{
+    "mcpServers": {
+        "langchain_docs": {
+            "transport": "http",
+            "url": "https://docs.langchain.com/mcp"
+        }
+    }
+}
+```
+
+MCP 工具在启动时通过 `langchain-mcp-adapters` 自动加载，并与内置工具合并使用。
+
 ## Docker 部署
 
 ```bash
@@ -123,6 +153,8 @@ docker build -t cai-coder .
 # 运行容器
 docker run --env-file .local.env -it cai-coder python -m agent.cli
 ```
+
+> Dockerfile 使用清华 PyPI 镜像加速构建。
 
 ## 运行测试
 
@@ -137,18 +169,19 @@ pytest -v
 pytest tests/test_agent.py
 ```
 
-> 测试通过 `pytest-env` 从 `.local.env` 加载环境变量。
+> 测试通过 `pytest-env` 从 `.local.env` 加载环境变量。  
+> 已启用 `asyncio_mode = "auto"` — 异步测试会被自动检测。
 
 ## 项目结构
 
 ```
 cai-coder/
 ├── agent/                        # 核心 Agent 包
-│   ├── cli.py                    # CLI 入口（交互式 REPL）
+│   ├── cli.py                    # CLI 入口（异步交互式 REPL）
 │   ├── server.py                 # Agent 工厂（LLM、工具、中间件、记忆）
-│   ├── prompt.py                 # 系统提示词构建
+│   ├── prompt.py                 # 系统提示词构建（模块化）
 │   ├── middleware/                # 中间件
-│   │   └── skill_middleware.py   #   SkillMiddleware — 将技能注入提示词
+│   │   └── skill_middleware.py   #   SkillMiddleware — 渐进式技能加载
 │   ├── tools/                    # 内置工具
 │   │   ├── __init__.py           #   工具导出
 │   │   ├── bash.py
@@ -157,16 +190,27 @@ cai-coder/
 │   │   ├── ls.py
 │   │   ├── read_file.py
 │   │   └── write_file.py
-│   ├── skills/                   # 技能定义
-│   │   ├── agents-md-generator/   #   AGENTS.md 生成技能
+│   ├── skills/                   # 技能定义（每个子目录含 SKILL.md）
+│   │   ├── agents-md-generator/  #   AGENTS.md 生成技能
 │   │   ├── python-patterns/      #   Python 最佳实践技能
 │   │   └── python-testing/       #   Python 测试技能
 │   └── utils/                    # 工具函数
 │       ├── common_util.py        #   项目根目录查找器
+│       ├── mcp_util.py           #   MCP 工具加载器（读取 mcp.json）
 │       └── skill.py              #   技能发现、解析、渲染
 ├── app/                          # 应用层（演示项目）
 │   └── snake-game/
 ├── tests/                        # 测试套件
+│   ├── file/                     #   文件相关测试数据
+│   ├── skills/                   #   技能相关测试
+│   ├── test_agent.py
+│   ├── test_agent_generate_code.py
+│   ├── test_agent_mcp.py
+│   ├── test_http_request.py
+│   ├── test_skills_loader.py
+│   ├── test_tools.py
+│   └── test_utils_config.py
+├── mcp.json                      # MCP 服务器配置
 ├── pyproject.toml                # 项目元数据与依赖
 ├── Dockerfile                    # Docker 镜像定义
 ├── .example.env                  # 环境变量模板
@@ -200,6 +244,12 @@ Agent 的详细执行指南...
 ```
 
 3. `SkillMiddleware` 会自动发现并将其纳入可用技能列表。
+
+### 添加 MCP 服务器
+
+1. 编辑项目根目录下的 `mcp.json`
+2. 在 `mcpServers` 下添加服务器配置
+3. 下次启动时 MCP 工具将自动加载
 
 ## 开源许可
 

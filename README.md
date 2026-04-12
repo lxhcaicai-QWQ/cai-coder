@@ -20,15 +20,16 @@
 
 ## What is cai-coder?
 
-**cai-coder** is an AI-powered coding agent built with **Python**, **LangChain**, and **LangGraph**. It features a unique **progressive skill-loading** mechanism that keeps the agent lightweight by default, only loading specialized capabilities when needed.
+**cai-coder** is an AI-powered coding agent built with **Python**, **LangChain**, and **LangGraph**. It features a unique **progressive skill-loading** mechanism that keeps the agent lightweight by default, only loading specialized capabilities when needed. It also supports **MCP (Model Context Protocol)** tool integration for seamless extension.
 
 ## Key Features
 
 - **Progressive Skill Loading** — Skills are loaded on-demand based on user intent, keeping the base agent lean and efficient.
 - **Built-in Toolset** — File I/O, shell execution, HTTP requests, weather queries, and more.
-- **Middleware Architecture** — Extensible middleware system (e.g., `SkillMiddleware`) for customizing agent behavior.
-- **Conversation Memory** — Stateful conversations powered by LangGraph's `InMemorySaver`.
-- **CLI Interface** — Interactive REPL for real-time coding assistance.
+- **MCP Tool Integration** — Connect external MCP servers to extend agent capabilities via `mcp.json`.
+- **Middleware Architecture** — Extensible middleware pipeline: skill loading, task tracking, tool/model retry with exponential backoff.
+- **Persistent Conversation Memory** — Stateful conversations powered by LangGraph's `AsyncSqliteSaver` with SQLite persistence.
+- **CLI Interface** — Interactive async REPL for real-time coding assistance.
 - **Docker Support** — Containerized deployment out of the box.
 
 ## How It Works
@@ -60,6 +61,16 @@ User Input → Agent (Base State)
 | `http_get` | Send GET requests (shortcut) |
 | `http_post` | Send POST requests (shortcut) |
 | `get_weather` | Get weather for a location |
+| `load_skill` | Load a skill's full instructions on demand |
+
+### Middleware Pipeline
+
+| Middleware | Purpose |
+|---|---|
+| `SkillMiddleware` | Injects skill descriptions into system prompt; provides `load_skill` tool |
+| `TodoListMiddleware` | Manages task tracking and progress visibility |
+| `ToolRetryMiddleware` | Retries failed tool calls (max 3, exponential backoff) |
+| `ModelRetryMiddleware` | Retries failed model calls (max 3, exponential backoff) |
 
 ## Quick Start
 
@@ -78,7 +89,7 @@ cd cai-coder
 # Install dependencies
 pip install -e .
 
-# Or with dev dependencies (pytest, etc.)
+# Or with dev dependencies (pytest, pytest-env, pytest-asyncio, python-dotenv)
 pip install -e ".[dev]"
 ```
 
@@ -114,6 +125,25 @@ Start chatting with the agent:
 > exit
 ```
 
+> The CLI uses `AsyncSqliteSaver` with `cai-coder-sqlite.db` for persistent conversation state across sessions.
+
+## MCP Integration
+
+cai-coder supports [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) tools. Configure MCP servers in `mcp.json`:
+
+```json
+{
+    "mcpServers": {
+        "langchain_docs": {
+            "transport": "http",
+            "url": "https://docs.langchain.com/mcp"
+        }
+    }
+}
+```
+
+MCP tools are automatically loaded at startup via `langchain-mcp-adapters` and merged with built-in tools.
+
 ## Docker
 
 ```bash
@@ -123,6 +153,8 @@ docker build -t cai-coder .
 # Run the container
 docker run --env-file .local.env -it cai-coder python -m agent.cli
 ```
+
+> The Dockerfile uses Tsinghua PyPI mirror for faster builds.
 
 ## Testing
 
@@ -137,18 +169,19 @@ pytest -v
 pytest tests/test_agent.py
 ```
 
-> Tests load environment variables from `.local.env` via `pytest-env`.
+> Tests load environment variables from `.local.env` via `pytest-env`.  
+> `asyncio_mode = "auto"` is enabled — async tests are automatically detected.
 
 ## Project Structure
 
 ```
 cai-coder/
 ├── agent/                        # Core agent package
-│   ├── cli.py                    # CLI entry point (interactive REPL)
+│   ├── cli.py                    # CLI entry point (interactive async REPL)
 │   ├── server.py                 # Agent factory (LLM, tools, middleware, memory)
-│   ├── prompt.py                 # System prompt construction
+│   ├── prompt.py                 # System prompt construction (modular sections)
 │   ├── middleware/                # Agent middleware
-│   │   └── skill_middleware.py   # SkillMiddleware — injects skills into prompts
+│   │   └── skill_middleware.py   # SkillMiddleware — progressive skill loading
 │   ├── tools/                    # Built-in tools
 │   │   ├── __init__.py           # Tool exports
 │   │   ├── bash.py
@@ -157,16 +190,27 @@ cai-coder/
 │   │   ├── ls.py
 │   │   ├── read_file.py
 │   │   └── write_file.py
-│   ├── skills/                   # Skill definitions
-│   │   ├── agents-md-generator/   #   AGENTS.md generation skill
+│   ├── skills/                   # Skill definitions (each has SKILL.md)
+│   │   ├── agents-md-generator/  #   AGENTS.md generation skill
 │   │   ├── python-patterns/      #   Python best practices skill
 │   │   └── python-testing/       #   Python testing skill
 │   └── utils/                    # Utility functions
 │       ├── common_util.py        #   Project root finder
+│       ├── mcp_util.py           #   MCP tool loader (reads mcp.json)
 │       └── skill.py              #   Skill discovery, parsing, rendering
 ├── app/                          # Application layer (demos)
 │   └── snake-game/
 ├── tests/                        # Test suite
+│   ├── file/                     #   File-related test fixtures
+│   ├── skills/                   #   Skill-specific tests
+│   ├── test_agent.py
+│   ├── test_agent_generate_code.py
+│   ├── test_agent_mcp.py
+│   ├── test_http_request.py
+│   ├── test_skills_loader.py
+│   ├── test_tools.py
+│   └── test_utils_config.py
+├── mcp.json                      # MCP server configuration
 ├── pyproject.toml                # Project metadata & dependencies
 ├── Dockerfile                    # Docker image definition
 ├── .example.env                  # Environment variable template
@@ -200,6 +244,12 @@ Detailed instructions for the agent...
 ```
 
 3. The `SkillMiddleware` will automatically discover and include it.
+
+### Add an MCP Server
+
+1. Edit `mcp.json` in the project root
+2. Add your server configuration under `mcpServers`
+3. MCP tools will be automatically loaded at the next startup
 
 ## License
 
