@@ -4,17 +4,9 @@ import subprocess
 
 from langchain_core.tools import tool
 
-from agent.utils.common_util import find_project_root
+from agent.utils.common_util import get_working_dir
 
 DEFAULT_TIMEOUT = 300  # 5 minutes
-
-
-def _get_working_dir() -> str:
-    """Get the working directory from env or fallback to project root."""
-    env_dir = os.getenv("WORKING_DIR")
-    if env_dir:
-        return str(os.path.abspath(env_dir))
-    return str(find_project_root())
 
 
 @tool
@@ -25,7 +17,7 @@ def bash(command: str, timeout: int = DEFAULT_TIMEOUT):
         command: The bash command to execute.
         timeout: Maximum execution time in seconds (default: 300).
     """
-    working_dir = _get_working_dir()
+    working_dir = get_working_dir()
 
     try:
         if platform.system() == "Windows":

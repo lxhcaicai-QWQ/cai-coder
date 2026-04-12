@@ -72,8 +72,8 @@ def test_bash_default_timeout_param() -> None:
 def test_bash_cwd_restricted() -> None:
     """bash should execute within the project working directory."""
     result = bash.invoke({"command": "pwd"})
-    from agent.tools.bash import _get_working_dir
-    working_dir = _get_working_dir()
+    from agent.utils.common_util import get_working_dir
+    working_dir = get_working_dir()
     assert working_dir in result
 
 
@@ -87,3 +87,73 @@ def test_bash_exit_code_on_failure() -> None:
     """Non-zero exit code should be reported."""
     result = bash.invoke({"command": "false"})
     assert "Exit code:" in result
+
+
+# --- Path validation tests ---
+
+def test_read_file_rejects_path_traversal() -> None:
+    """read_file must reject paths that escape WORKING_DIR."""
+    result = read_file.invoke({"file_path": "/etc/passwd"})
+    assert "outside" in result
+
+
+def test_read_file_rejects_relative_traversal() -> None:
+    """read_file must reject relative paths like '../../../etc/passwd'."""
+    result = read_file.invoke({"file_path": "../../../etc/passwd"})
+    assert "outside" in result
+
+
+def test_write_file_rejects_path_traversal() -> None:
+    """write_file must reject paths that escape WORKING_DIR."""
+    result = write_file.invoke(
+        {"file_path": "/tmp/evil_write.txt", "content": "pwned"}
+    )
+    assert result["success"] is False
+    assert "outside" in result["error"]
+
+
+def test_ls_rejects_path_traversal() -> None:
+    """ls must reject paths that escape WORKING_DIR."""
+    result = ls.invoke({"path": "/etc"})
+    assert "outside" in result
+
+
+def test_ls_relative_path_inside_working_dir() -> None:
+    """ls should accept relative paths that resolve inside WORKING_DIR."""
+    result = ls.invoke({"path": "tests/file"})
+    assert isinstance(result, list)
+
+
+def test_read_file_relative_path_inside_working_dir() -> None:
+    """read_file should accept relative paths that resolve inside WORKING_DIR."""
+    result = read_file.invoke({"file_path": "tests/file/a.txt"})
+    assert "this is a content" in result
+
+
+def test_write_and_read_relative_path() -> None:
+    """write_file + read_file should work with relative paths inside WORKING_DIR."""
+    write_result = write_file.invoke(
+        {"file_path": "tests/file/c.txt", "content": "path validation ok"}
+    )
+    assert write_result["success"] is True
+
+    read_result = read_file.invoke({"file_path": "tests/file/c.txt"})
+    assert read_result == "path validation ok"
+
+
+def test_resolve_path_raises_on_escape() -> None:
+    """resolve_path should raise ValueError for escaping paths."""
+    from agent.utils.common_util import resolve_path
+    import pytest
+
+    with pytest.raises(ValueError, match="outside"):
+        resolve_path("/etc/passwd")
+
+
+def test_resolve_path_ok_for_working_dir_subpath() -> None:
+    """resolve_path should succeed for paths inside WORKING_DIR."""
+    from agent.utils.common_util import resolve_path, get_working_dir
+
+    resolved = resolve_path("tests/file/a.txt")
+    working_dir = get_working_dir()
+    assert resolved.startswith(working_dir)
