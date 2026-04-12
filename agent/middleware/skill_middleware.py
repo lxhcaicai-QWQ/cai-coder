@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import TypedDict, Callable
+from typing import Callable, Awaitable
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain_core.messages import SystemMessage
@@ -71,6 +71,32 @@ class SkillMiddleware(AgentMiddleware):
         modified_request = request.override(system_message=new_system_message)
         return handler(modified_request)
 
+    async def awrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
+    ) -> ModelResponse:
+        """Sync: Inject skill descriptions into system prompt."""
+        # Build the skills addendum
+        skills_addendum = (
+            SKILL_PROMPT +
+            f"\n## Skill Pool\nBelow is the list of loadable skills. \n{self.skills_prompt}\n"
+        )
+
+        # Append to system message content blocks
+        new_content = list(request.system_message.content_blocks) + [
+            {"type": "text", "text": skills_addendum}
+        ]
+        new_system_message = SystemMessage(content=new_content)
+        modified_request = request.override(system_message=new_system_message)
+
+        for attempt in range(3):
+            try:
+                return await handler(modified_request)
+            except Exception:
+                if attempt == 2:
+                    raise
+        return None
 
 
 skillDict: dict = json.loads(
