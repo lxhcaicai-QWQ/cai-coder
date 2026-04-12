@@ -29,3 +29,8 @@ htmlcov/
 tmp/
 temp/
 *.tmp
+
+# db
+*.db
+*.db-shm
+*.db-wal

@@ -4,6 +4,7 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import TodoListMiddleware, ToolRetryMiddleware, ModelRetryMiddleware
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Checkpointer
 
 from .middleware import SkillMiddleware
 from .tools import (
@@ -39,11 +40,7 @@ def _build_llm() -> ChatOpenAI:
         temperature=0.7,
     )
 
-
-memory = InMemorySaver()
-
-
-def get_agent():
+def get_agent(checkpointer: Checkpointer = InMemorySaver()):
     return create_agent(
         model=_build_llm(),
         system_prompt=construct_system_prompt(),
@@ -71,5 +68,5 @@ def get_agent():
                 backoff_factor=2.0  # 指数退避乘数。每次重试等待 initial_delay * (backoff_factor ** retry_number) 秒。
             )
         ],
-        checkpointer=memory
+        checkpointer=checkpointer
     )

@@ -7,3 +7,8 @@
 .idea
 .local.env
 tests/snake-game/
+
+# db
+*.db
+*.db-shm
+*.db-wal

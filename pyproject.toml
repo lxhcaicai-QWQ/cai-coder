@@ -10,6 +10,7 @@ dependencies = [
     "langchain>=1.2.9",
     "langgraph>=1.0.8",
     "langchain-openai==1.1.10",
+    "langgraph-checkpoint-sqlite>=3.0.3",
     "pyyaml>=6.0",
     "requests>=2.31.0",
 ]
