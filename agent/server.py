@@ -2,6 +2,7 @@ import os
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import TodoListMiddleware, ToolRetryMiddleware, ModelRetryMiddleware
+from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Checkpointer
@@ -40,20 +41,26 @@ def _build_llm() -> ChatOpenAI:
         temperature=0.7,
     )
 
-def get_agent(checkpointer: Checkpointer = InMemorySaver()):
+def get_agent(checkpointer: Checkpointer = InMemorySaver(), mcptools: list[BaseTool] = None):
+
+    agent_tools = [
+        get_weather,
+        read_file,
+        write_file,
+        ls,
+        bash,
+        http_request,
+        http_get,
+        http_post
+    ]
+
+    if mcptools:
+        agent_tools.extend(mcptools)
+
     return create_agent(
         model=_build_llm(),
         system_prompt=construct_system_prompt(),
-        tools=[
-            get_weather,
-            read_file,
-            write_file,
-            ls,
-            bash,
-            http_request,
-            http_get,
-            http_post
-        ],
+        tools=agent_tools,
         middleware=[
             SkillMiddleware(),
             TodoListMiddleware(),
