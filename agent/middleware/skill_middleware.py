@@ -78,7 +78,7 @@ skillDict: dict = json.loads(
 )
 
 
-SKILLS: list[SkillRecord] = skillDict.get("available_skills")
+SKILLS: list[SkillRecord] = skillDict.get("available_skills") or []
 
 SKILL_PROMPT = """
 
