@@ -1,6 +1,7 @@
 import os
 
 from langchain.agents import create_agent
+from langchain.agents.middleware import TodoListMiddleware, ToolRetryMiddleware, ModelRetryMiddleware
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -56,6 +57,19 @@ def get_agent():
             http_get,
             http_post
         ],
-        middleware=[SkillMiddleware()],
+        middleware=[
+            SkillMiddleware(),
+            TodoListMiddleware(),
+            ToolRetryMiddleware(
+                max_retries=3,
+                initial_delay=1.0,  # 第一次重试前的初始延迟（以秒为单位）
+                backoff_factor=2.0 # 指数退避乘数。每次重试等待 initial_delay * (backoff_factor ** retry_number) 秒。
+            ),
+            ModelRetryMiddleware(
+                max_retries=3,
+                initial_delay=1.0,  # 第一次重试前的初始延迟（以秒为单位）
+                backoff_factor=2.0  # 指数退避乘数。每次重试等待 initial_delay * (backoff_factor ** retry_number) 秒。
+            )
+        ],
         checkpointer=memory
     )
