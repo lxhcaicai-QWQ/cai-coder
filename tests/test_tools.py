@@ -47,3 +47,43 @@ def test_bash_ls() -> None:
     path = str(Path(__file__).parent / 'file')
     result = bash.invoke({"command": f"ls {path}"})
     assert result == "a.txt\nb.txt\nc.txt\n"
+
+
+# --- Bash timeout & path restriction tests ---
+
+def test_bash_timeout_expired() -> None:
+    """Command exceeding timeout should return a timeout error message."""
+    result = bash.invoke({"command": "sleep 10", "timeout": 1})
+    assert "timed out" in result
+
+
+def test_bash_custom_timeout_ok() -> None:
+    """Command finishing within custom timeout should succeed."""
+    result = bash.invoke({"command": "echo 'fast'", "timeout": 5})
+    assert "fast" in result
+
+
+def test_bash_default_timeout_param() -> None:
+    """Default timeout should be 300 seconds (check module constant)."""
+    from agent.tools.bash import DEFAULT_TIMEOUT
+    assert DEFAULT_TIMEOUT == 300
+
+
+def test_bash_cwd_restricted() -> None:
+    """bash should execute within the project working directory."""
+    result = bash.invoke({"command": "pwd"})
+    from agent.tools.bash import _get_working_dir
+    working_dir = _get_working_dir()
+    assert working_dir in result
+
+
+def test_bash_stderr_included_on_error() -> None:
+    """Non-zero exit code should include stderr in the output."""
+    result = bash.invoke({"command": "cat /nonexistent_path_xyz_12345"})
+    assert "STDERR:" in result or "No such file" in result
+
+
+def test_bash_exit_code_on_failure() -> None:
+    """Non-zero exit code should be reported."""
+    result = bash.invoke({"command": "false"})
+    assert "Exit code:" in result
