@@ -17,27 +17,34 @@ from .tools import (
 )
 from .prompt import construct_system_prompt
 
-#==================================
+_REQUIRED_ENV_VARS = ("OPENAI_BASE_URL", "OPENAI_API_KEY", "OPENAI_MODEL")
 
-BASE_URL = os.getenv("OPENAI_BASE_URL")      # 例如 https://api.your-service.com/v1
-API_KEY = os.getenv("OPENAI_API_KEY")
-MODEL_NAME = os.getenv("OPENAI_MODEL")
 
-llm = ChatOpenAI(
-    model=MODEL_NAME,           # 模型名，会透传给服务端
-    base_url=BASE_URL,          # 自定义 base_url
-    api_key=API_KEY,            # 你的 API key
-    temperature=0.7
-    # max_tokens=..., timeout=..., 其他参数也可以直接写
-)
+def _check_env_vars() -> None:
+    missing = [var for var in _REQUIRED_ENV_VARS if not os.getenv(var)]
+    if missing:
+        raise EnvironmentError(
+            f"Missing required environment variable(s): {', '.join(missing)}. "
+            "Please set them in .local.env or your shell environment."
+        )
 
-#==================================
+
+def _build_llm() -> ChatOpenAI:
+    _check_env_vars()
+    return ChatOpenAI(
+        model=os.getenv("OPENAI_MODEL"),
+        base_url=os.getenv("OPENAI_BASE_URL"),
+        api_key=os.getenv("OPENAI_API_KEY"),
+        temperature=0.7,
+    )
+
 
 memory = InMemorySaver()
 
+
 def get_agent():
     return create_agent(
-        model=llm,
+        model=_build_llm(),
         system_prompt=construct_system_prompt(),
         tools=[
             get_weather,

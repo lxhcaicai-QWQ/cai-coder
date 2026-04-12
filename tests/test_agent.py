@@ -19,7 +19,7 @@ def test_agent_read_file() -> None:
 
 def test_agent_write_file() -> None:
     path = str(Path(__file__).parent / 'file/c.txt')
-    content = f"Help me write the content [I love you forever!] to {path}"
+    content = f"Help me write the content `path validation ok` to {path}"
     config = {"configurable": {"thread_id": str(uuid.uuid4())  }}
     agent = server.get_agent()
     response = agent.invoke({"messages": [{"role": "user", "content": content}]}, config=config)

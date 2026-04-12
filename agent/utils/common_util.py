@@ -1,4 +1,6 @@
+import os
 from pathlib import Path
+
 
 def find_project_root(start_path=None) -> Path:
     current = Path(start_path or __file__).resolve()
@@ -6,3 +8,43 @@ def find_project_root(start_path=None) -> Path:
         if (parent / "pyproject.toml").exists():
             return parent
     raise FileNotFoundError("not found pyproject.toml")
+
+
+def get_working_dir() -> str:
+    """Get the working directory from env or fallback to project root."""
+    env_dir = os.getenv("WORKING_DIR")
+    if env_dir:
+        return str(os.path.abspath(env_dir))
+    return str(find_project_root())
+
+
+def resolve_path(path: str) -> str:
+    """Resolve a path relative to WORKING_DIR and verify it stays within bounds.
+
+    - Relative paths are resolved against WORKING_DIR.
+    - Absolute paths are checked to ensure they reside under WORKING_DIR.
+    - Symlinks are resolved to detect path-traversal attempts.
+
+    Returns:
+        The resolved absolute path string.
+
+    Raises:
+        ValueError: If the resolved path escapes WORKING_DIR.
+    """
+    working_dir = Path(get_working_dir()).resolve()
+
+    # Treat the path as relative to WORKING_DIR when it is not absolute
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        candidate = working_dir / candidate
+
+    # Resolve symlinks and normalise '..' / '.' components
+    resolved = candidate.resolve()
+
+    if not str(resolved).startswith(str(working_dir)):
+        raise ValueError(
+            f"Path '{path}' resolves to '{resolved}' which is outside "
+            f"the working directory '{working_dir}'. Operation denied."
+        )
+
+    return str(resolved)
