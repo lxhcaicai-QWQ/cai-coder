@@ -31,6 +31,8 @@ class FeishuBot:
         # 初始化 cai-coder 客户端
         self.cai_coder = CaiCoderClient()
 
+        self.task_db = set()
+
         # 会话过期时间
         self.session_timeout = FeishuBotConfig.SESSION_TIMEOUT
 
@@ -85,6 +87,11 @@ class FeishuBot:
             if not text:
                 return
 
+            # 消息已经回复过，直接跳过，避免长链接重放
+            if message_id in self.task_db:
+                print(f"[消息重复] message_id={message_id} 已经跳过")
+                return
+
             final_text = text
             # 获取 mentions 数组（如果没有@任何人，这个字段可能为空）
             mentions = event.message.mentions
@@ -116,6 +123,8 @@ class FeishuBot:
             self._reply_message(message_id, reply)
 
             print(f"[发送回复] message_id={message_id}, reply={reply}")
+
+            self.task_db.add(message_id)
 
         except Exception as e:
             print(f"处理消息时出错: {e}")
