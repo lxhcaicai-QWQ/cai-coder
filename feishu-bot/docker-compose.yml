@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  caicoder-api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: caicoder-api
+    ports:
+      - "8000:8000"
+    env_file:
+      - ../.local.env
+    volumes:
+      - ..:/workspace
+    command: python -m agent.webapp
+    networks:
+      - cai-coder-network
+
+  feishu-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: feishu-bot
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    depends_on:
+      - caicoder-api
+    networks:
+      - cai-coder-network
+
+networks:
+  cai-coder-network:
+    driver: bridge

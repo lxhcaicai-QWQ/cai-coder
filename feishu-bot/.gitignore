@@ -1,17 +1,5 @@
-# Default ignored files
-/shelf/
-/.idea/workspace.xml
-# Editor-based HTTP Client requests
-/httpRequests/
-/.idea/
-.idea
-.local.env
-tests/snake-game/
-
-# db
-*.db
-*.db-shm
-*.db-wal
+# Environment variables
+.env
 
 # Python
 __pycache__/
@@ -37,6 +25,17 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+logs/
 
 # OS
 .DS_Store

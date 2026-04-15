@@ -40,6 +40,13 @@ cai-coder/
 │       └── skill.py         # Skill discovery, parsing, rendering
 ├── app/                     # Application layer (e.g. snake-game demo)
 │   └── snake-game/
+├── feishu-bot/              # Feishu bot integration (feature_feishubot)
+│   ├── bot.py               # Main bot application (FastAPI)
+│   ├── client.py            # Cai-Coder API client
+│   ├── config.py            # Bot configuration
+│   ├── requirements.txt     # Python dependencies
+│   ├── .env.example         # Environment variables template
+│   └── README.md            # Bot documentation
 ├── tests/                   # Test suite
 │   ├── file/                # File-related test fixtures
 │   ├── skills/              # Skill-specific tests
@@ -166,6 +173,43 @@ A FastAPI application providing an **OpenAI-compatible** chat completions API:
 - Request/response bodies follow the OpenAI API schema (Pydantic models).
 - Streaming uses SSE (`text/event-stream`) with `ChatCompletionChunk` events.
 - CORS is enabled for all origins.
+
+### Feishu Bot Integration (`feishu-bot/`)
+A lightweight Feishu bot service that bridges Feishu messages to the Cai-Coder Web API (available in `feature_feishubot` branch).
+
+#### Setup
+```bash
+cd feishu-bot
+cp .env.example .env
+# Edit .env with your Feishu app credentials
+pip install -r requirements.txt
+python bot.py
+```
+
+#### Architecture
+```
+Feishu Message → Feishu Bot → Cai-Coder Web API → LLM
+                             ↓
+                         Feishu Reply
+```
+
+#### Features
+- ✅ Receives and processes Feishu text messages
+- ✅ Multi-turn conversation memory
+- ✅ Calls Cai-Coder Web API
+- ✅ Automatic session cleanup (TTL)
+- ✅ Supports both group chats and private messages
+- ✅ Feishu event signature verification
+- ✅ Health check endpoint
+
+#### Configuration
+Set these environment variables in `feishu-bot/.env`:
+- `FEISHU_APP_ID`: Feishu application ID
+- `FEISHU_APP_SECRET`: Feishu application secret
+- `FEISHU_VERIFICATION_TOKEN`: Feishu verification token
+- `CAICODER_API_URL`: Cai-Coder API URL (default: `http://localhost:8000`)
+
+See `feishu-bot/README.md` for detailed documentation.
 
 ### Config via env
 All runtime configuration (LLM credentials, model, working dir) is sourced from environment variables. Never hardcode secrets.
