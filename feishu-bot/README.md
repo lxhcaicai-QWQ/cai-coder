@@ -2,23 +2,47 @@
 
 轻量级飞书机器人，将 Cai-Coder AI 能力接入飞书群聊和私聊。
 
+支持两种连接模式：
+- **Webhook 模式**（短连接）：飞书服务器主动推送消息
+- **SSE 模式**（长连接）：主动连接飞书事件订阅服务
+
 ## 🏗️ 架构设计
 
+### Webhook 模式
 ```
 飞书消息 → 飞书机器人服务 → Cai-Coder Web API → LLM
                               ↓
                          飞书返回消息
 ```
 
+### SSE 事件订阅模式
+```
+机器人服务 ←─ SSE 长连接 ─→ 飞书事件订阅服务
+    ↓
+Cai-Coder Web API → LLM
+    ↓
+飞书返回消息
+```
+
 ## ✨ 功能特性
 
+### 通用功能
 - ✅ 接收和处理飞书文本消息
 - ✅ 多轮对话记忆（基于会话 ID）
 - ✅ 调用 Cai-Coder Web API 获取 AI 回复
 - ✅ 自动会话过期清理（TTL 机制）
 - ✅ 支持群聊和私聊
-- ✅ 飞书事件签名验证
 - ✅ 健康检查端点
+
+### Webhook 模式
+- ✅ 飞书事件签名验证
+- ✅ 实时消息接收
+
+### SSE 事件订阅模式
+- ✅ 长连接实时通讯
+- ✅ 不需要公网 IP
+- ✅ 自动重连机制
+- ✅ 双向通讯支持
 
 ## 📦 安装
 
@@ -46,17 +70,52 @@ python -m agent.webapp
 
 ## 🚀 使用
 
-### 启动机器人
+### 选择连接模式
+
+编辑 `.env` 文件设置 `CONNECTION_MODE`：
+
+```bash
+# Webhook 模式（默认）- 需要公网 IP 或内网穿透
+CONNECTION_MODE=webhook
+
+# SSE 事件订阅模式 - 不需要公网 IP，长连接
+CONNECTION_MODE=subscription
+```
+
+### Webhook 模式启动
 
 ```bash
 cd feishu-bot
 python bot.py
 ```
 
-或使用 uvicorn：
+或使用启动脚本：
 
 ```bash
+./start.sh
+```
+
+### SSE 事件订阅模式启动
+
+```bash
+cd feishu-bot
+python bot_sse.py
+```
+
+或使用启动脚本：
+
+```bash
+./start_sse.sh
+```
+
+### 使用 uvicorn
+
+```bash
+# Webhook 模式
 uvicorn bot:app --host 0.0.0.0 --port 8080
+
+# SSE 模式
+uvicorn bot_sse:app --host 0.0.0.0 --port 8080
 ```
 
 ### 配置飞书机器人
@@ -100,6 +159,7 @@ uvicorn bot:app --host 0.0.0.0 --port 8080
 | `BOT_HOST` | 机器人服务地址 | `0.0.0.0` |
 | `MAX_HISTORY` | 最大对话历史消息数 | `10` |
 | `SESSION_TTL` | 会话过期时间（秒） | `3600` |
+| `CONNECTION_MODE` | 连接模式 | `webhook` 或 `subscription` |
 
 ## 🧪 测试
 
@@ -111,11 +171,23 @@ curl http://localhost:8080/health
 
 预期响应：
 
+**Webhook 模式：**
 ```json
 {
   "status": "healthy",
   "caicoder_api": "connected",
   "active_sessions": 0
+}
+```
+
+**SSE 模式：**
+```json
+{
+  "status": "healthy",
+  "caicoder_api": "connected",
+  "connection_mode": "subscription (SSE)",
+  "active_sessions": 0,
+  "event_manager_running": true
 }
 ```
 
@@ -127,12 +199,16 @@ curl http://localhost:8080/health
 
 ```
 feishu-bot/
-├── bot.py              # 主程序，FastAPI 应用
+├── bot.py              # 主程序（Webhook 模式）
+├── bot_sse.py          # 主程序（SSE 事件订阅模式）
 ├── client.py           # Cai-Coder API 客户端
 ├── config.py           # 配置管理
+├── event_subscription.py  # 事件订阅服务（SSE）
 ├── requirements.txt    # Python 依赖
 ├── .env.example        # 环境变量模板
-└── README.md          # 说明文档
+├── README.md          # 说明文档
+├── start.sh            # Webhook 模式启动脚本
+└── start_sse.sh        # SSE 模式启动脚本
 ```
 
 ## 🛠️ 技术栈
@@ -165,7 +241,7 @@ COPY . .
 CMD ["python", "bot.py"]
 ```
 
-### Nginx 反向代理
+### Nginx 反向代理（Webhook 模式）
 
 ```nginx
 server {
@@ -180,6 +256,18 @@ server {
 }
 ```
 
+### SSE 模式部署
+
+SSE 模式不需要公网 IP，可以直接在内网运行：
+
+```bash
+# 启动机器人
+cd feishu-bot
+./start_sse.sh
+```
+
+确保防火墙允许出站连接（连接到飞书服务器）。
+
 ## 📝 下一步优化
 
 - [ ] 支持流式响应
@@ -189,6 +277,8 @@ server {
 - [ ] 支持多机器人实例
 - [ ] 添加监控和日志
 - [ ] 实现 Docker Compose 部署
+- [ ] 添加 SSE 模式的性能监控
+- [ ] 实现双模式热切换
 
 ## 🤝 贡献
 

@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     max_history: int = 10  # Maximum messages to keep in conversation history
     session_ttl: int = 3600  # Session TTL in seconds (1 hour)
 
+    # Connection Mode
+    connection_mode: str = "webhook"  # "webhook" or "subscription" (long connection)
+
+
     class Config:
         env_file = ".env"
         case_sensitive = False
