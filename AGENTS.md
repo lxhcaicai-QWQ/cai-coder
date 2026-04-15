@@ -4,11 +4,11 @@
 
 ## Project Overview
 
-**cai-coder** is an AI coding agent built with **Python 3.11+**, powered by **LangChain** + **LangGraph**. It features a progressive skill-loading mechanism, a set of built-in tools (file I/O, shell, HTTP, weather), MCP tool integration, and a middleware-based architecture for extensible agent behavior.
+**cai-coder** is an AI coding agent built with **Python 3.11+**, powered by **LangChain** + **LangGraph**. It features a progressive skill-loading mechanism, a set of built-in tools (file I/O, shell, HTTP, weather), MCP tool integration, a middleware-based architecture for extensible agent behavior, and an OpenAI-compatible Web API via FastAPI.
 
 - **Primary language**: Python 3.11+
-- **Key frameworks**: LangChain (`>=1.2.9`), LangGraph (`>=1.0.8`), langchain-openai (`==1.1.10`)
-- **Key libraries**: langgraph-checkpoint-sqlite (`>=3.0.3`), langchain-mcp-adapters (`>=0.2.0`), pyyaml (`>=6.0`), requests (`>=2.31.0`)
+- **Key frameworks**: LangChain (`>=1.2.9`), LangGraph (`>=1.0.8`), langchain-openai (`==1.1.10`), FastAPI (`>=0.115.0`)
+- **Key libraries**: langgraph-checkpoint-sqlite (`>=3.0.3`), langchain-mcp-adapters (`>=0.2.0`), pyyaml (`>=6.0`), requests (`>=2.31.0`), uvicorn (`>=0.32.0`)
 - **Build system**: Hatchling (`pyproject.toml`)
 
 ## Project Structure
@@ -19,6 +19,7 @@ cai-coder/
 │   ├── cli.py               # CLI entry point (interactive async REPL)
 │   ├── server.py            # Agent factory (LLM, tools, middleware, memory)
 │   ├── prompt.py            # System prompt construction (modular sections)
+│   ├── webapp.py            # OpenAI-compatible Web API (FastAPI + SSE streaming)
 │   ├── middleware/           # Agent middleware
 │   │   └── skill_middleware.py  # SkillMiddleware — progressive skill loading
 │   ├── tools/               # Built-in tools
@@ -49,7 +50,8 @@ cai-coder/
 │   ├── test_http_request.py
 │   ├── test_skills_loader.py
 │   ├── test_tools.py
-│   └── test_utils_config.py
+│   ├── test_utils_config.py
+│   └── test_web_api.py      # Web API endpoint tests
 ├── pyproject.toml           # Project metadata & dependencies
 ├── mcp.json                 # MCP server configuration
 ├── Dockerfile               # Docker image definition
@@ -92,6 +94,16 @@ python -m agent.cli
 
 > The CLI uses `AsyncSqliteSaver` with `cai-coder-sqlite.db` for persistent conversation state. Enter `exit` to quit.
 
+### Run the Web API server
+
+```bash
+python -m agent.webapp
+# or
+uvicorn agent.webapp:app --host 0.0.0.0 --port 8000
+```
+
+> The Web API provides an OpenAI-compatible `/v1/chat/completions` endpoint supporting both streaming (SSE) and non-streaming modes. It uses `InMemorySaver` (no persistent state across restarts). Health check: `GET /health`. Models list: `GET /v1/models`.
+
 ### Run tests
 
 ```bash
@@ -102,7 +114,7 @@ pytest -v
 pytest tests/test_agent.py
 ```
 
-> Tests read environment variables from `.local.env` via `pytest-env` (`env_files = ".local.env"`).  
+> Tests read environment variables from `.local.env` via `pytest-env` (`env_files = ".local.env"`).
 > `asyncio_mode = "auto"` is enabled — async tests are automatically detected.
 
 ### Docker
@@ -139,8 +151,21 @@ All tools live in `agent/tools/` as individual modules, exported via `agent/tool
 The system prompt is assembled in `agent/prompt.py` from modular sections (role, working environment, project setup, editing constraints, tool usage, git hygiene). Modifications should be made in the corresponding section constant, not hardcoded elsewhere.
 
 ### Memory & Checkpointing
-- **Default**: `InMemorySaver` (ephemeral, for testing/programmatic use).
+- **Default / Web API**: `InMemorySaver` (ephemeral, for testing/programmatic use).
 - **CLI**: `AsyncSqliteSaver` backed by `cai-coder-sqlite.db` for persistent conversation state across sessions.
+
+### Web API (`agent/webapp.py`)
+A FastAPI application providing an **OpenAI-compatible** chat completions API:
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/health` | GET | Health check |
+| `/v1/models` | GET | List available models |
+| `/v1/chat/completions` | POST | Chat completions (streaming & non-streaming) |
+
+- Request/response bodies follow the OpenAI API schema (Pydantic models).
+- Streaming uses SSE (`text/event-stream`) with `ChatCompletionChunk` events.
+- CORS is enabled for all origins.
 
 ### Config via env
 All runtime configuration (LLM credentials, model, working dir) is sourced from environment variables. Never hardcode secrets.

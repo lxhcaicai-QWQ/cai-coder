@@ -9,6 +9,7 @@
   <img src="https://img.shields.io/badge/Python-3.11+-blue.svg" alt="Python 3.11+">
   <img src="https://img.shields.io/badge/LangChain-1.2.9+-green.svg" alt="LangChain">
   <img src="https://img.shields.io/badge/LangGraph-1.0.8+-orange.svg" alt="LangGraph">
+  <img src="https://img.shields.io/badge/FastAPI-0.115.0+-009688.svg" alt="FastAPI">
   <img src="https://img.shields.io/badge/license-MIT-lightgrey.svg" alt="License">
 </p>
 
@@ -20,16 +21,17 @@
 
 ## What is cai-coder?
 
-**cai-coder** is an AI-powered coding agent built with **Python**, **LangChain**, and **LangGraph**. It features a unique **progressive skill-loading** mechanism that keeps the agent lightweight by default, only loading specialized capabilities when needed. It also supports **MCP (Model Context Protocol)** tool integration for seamless extension.
+**cai-coder** is an AI-powered coding agent built with **Python**, **LangChain**, and **LangGraph**. It features a unique **progressive skill-loading** mechanism that keeps the agent lightweight by default, only loading specialized capabilities when needed. It also supports **MCP (Model Context Protocol)** tool integration for seamless extension, and provides an **OpenAI-compatible Web API** via FastAPI.
 
 ## Key Features
 
 - **Progressive Skill Loading** — Skills are loaded on-demand based on user intent, keeping the base agent lean and efficient.
 - **Built-in Toolset** — File I/O, shell execution, HTTP requests, weather queries, and more.
 - **MCP Tool Integration** — Connect external MCP servers to extend agent capabilities via `mcp.json`.
+- **OpenAI-Compatible Web API** — FastAPI-powered HTTP API with streaming (SSE) and non-streaming modes, compatible with the OpenAI `/v1/chat/completions` interface.
 - **Middleware Architecture** — Extensible middleware pipeline: skill loading, task tracking, tool/model retry with exponential backoff.
-- **Persistent Conversation Memory** — Stateful conversations powered by LangGraph's `AsyncSqliteSaver` with SQLite persistence.
-- **CLI Interface** — Interactive async REPL for real-time coding assistance.
+- **Persistent Conversation Memory** — Stateful conversations powered by LangGraph's `AsyncSqliteSaver` with SQLite persistence (CLI mode).
+- **CLI & API Dual Interface** — Interactive async REPL for real-time coding assistance, plus HTTP API for programmatic integration.
 - **Docker Support** — Containerized deployment out of the box.
 
 ## How It Works
@@ -111,7 +113,7 @@ OPENAI_MODEL=gpt-4
 
 > `.local.env` is git-ignored and should **never** be committed.
 
-### 3. Run
+### 3. Run the CLI Agent
 
 ```bash
 python -m agent.cli
@@ -126,6 +128,48 @@ Start chatting with the agent:
 ```
 
 > The CLI uses `AsyncSqliteSaver` with `cai-coder-sqlite.db` for persistent conversation state across sessions.
+
+### 4. Run the Web API Server
+
+```bash
+python -m agent.webapp
+# or
+uvicorn agent.webapp:app --host 0.0.0.0 --port 8000
+```
+
+The Web API provides an **OpenAI-compatible** chat completions endpoint:
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/health` | GET | Health check |
+| `/v1/models` | GET | List available models |
+| `/v1/chat/completions` | POST | Chat completions (streaming & non-streaming) |
+
+#### Example: Non-streaming Request
+
+```bash
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "cai-coder",
+    "messages": [{"role": "user", "content": "Hello, who are you?"}],
+    "stream": false
+  }'
+```
+
+#### Example: Streaming Request (SSE)
+
+```bash
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "cai-coder",
+    "messages": [{"role": "user", "content": "Write a Python hello world"}],
+    "stream": true
+  }'
+```
+
+> The Web API uses `InMemorySaver` (ephemeral — no persistent state across restarts). CORS is enabled for all origins.
 
 ## MCP Integration
 
@@ -150,8 +194,11 @@ MCP tools are automatically loaded at startup via `langchain-mcp-adapters` and m
 # Build the image
 docker build -t cai-coder .
 
-# Run the container
+# Run the CLI agent
 docker run --env-file .local.env -it cai-coder python -m agent.cli
+
+# Run the Web API server
+docker run --env-file .local.env -p 8000:8000 cai-coder uvicorn agent.webapp:app --host 0.0.0.0 --port 8000
 ```
 
 > The Dockerfile uses Tsinghua PyPI mirror for faster builds.
@@ -180,10 +227,12 @@ cai-coder/
 │   ├── cli.py                    # CLI entry point (interactive async REPL)
 │   ├── server.py                 # Agent factory (LLM, tools, middleware, memory)
 │   ├── prompt.py                 # System prompt construction (modular sections)
+│   ├── webapp.py                 # OpenAI-compatible Web API (FastAPI + SSE streaming)
 │   ├── middleware/                # Agent middleware
-│   │   └── skill_middleware.py   # SkillMiddleware — progressive skill loading
+│   │   ├── __init__.py           #   Middleware exports
+│   │   └── skill_middleware.py   #   SkillMiddleware — progressive skill loading
 │   ├── tools/                    # Built-in tools
-│   │   ├── __init__.py           # Tool exports
+│   │   ├── __init__.py           #   Tool exports
 │   │   ├── bash.py
 │   │   ├── get_weather.py
 │   │   ├── http_request.py
@@ -209,7 +258,8 @@ cai-coder/
 │   ├── test_http_request.py
 │   ├── test_skills_loader.py
 │   ├── test_tools.py
-│   └── test_utils_config.py
+│   ├── test_utils_config.py
+│   └── test_web_api.py           #   Web API endpoint tests
 ├── mcp.json                      # MCP server configuration
 ├── pyproject.toml                # Project metadata & dependencies
 ├── Dockerfile                    # Docker image definition
@@ -217,6 +267,35 @@ cai-coder/
 ├── .local.env                    # Local environment (git-ignored)
 └── AGENTS.md                     # AI agent conventions
 ```
+
+## Architecture
+
+### Memory & Checkpointing
+
+| Mode | Checkpointer | Persistence |
+|---|---|---|
+| **CLI** | `AsyncSqliteSaver` (`cai-coder-sqlite.db`) | Persistent across sessions |
+| **Web API** | `InMemorySaver` | Ephemeral (lost on restart) |
+
+### Web API
+
+A FastAPI application providing an **OpenAI-compatible** chat completions API:
+
+- Request/response bodies follow the OpenAI API schema (Pydantic models).
+- Streaming uses SSE (`text/event-stream`) with `ChatCompletionChunk` events.
+- Non-streaming returns a full `ChatCompletionResponse`.
+- CORS is enabled for all origins.
+
+### Config via Env
+
+All runtime configuration (LLM credentials, model, working dir) is sourced from environment variables. Never hardcode secrets.
+
+| Variable | Description |
+|---|---|
+| `OPENAI_API_KEY` | API key for the LLM provider |
+| `OPENAI_BASE_URL` | Custom base URL for the LLM API endpoint |
+| `OPENAI_MODEL` | Model name to use |
+| `WORKING_DIR` | (Optional) Override the working directory for the agent |
 
 ## Extending
 
