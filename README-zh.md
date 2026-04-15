@@ -219,6 +219,50 @@ pytest tests/test_agent.py
 > 测试通过 `pytest-env` 从 `.local.env` 加载环境变量。  
 > 已启用 `asyncio_mode = "auto"` — 异步测试会被自动检测。
 
+## 飞书机器人集成
+
+cai-coder 支持通过飞书长连接接入，无需公网 IP 即可在飞书中使用 AI 编程助手。
+
+### 功能特性
+
+- ✅ 使用飞书长连接模式接收消息（无需公网 IP）
+- ✅ 调用 cai-coder Web API 获取回复
+- ✅ 支持多轮对话和会话记忆
+- ✅ 会话自动过期清理
+- ✅ 支持群聊和私聊
+
+### 快速开始
+
+1. **启动 cai-coder Web API**
+   ```bash
+   python -m agent.webapp
+   ```
+
+2. **安装飞书机器人依赖**
+   ```bash
+   cd feishubot
+   pip install -r requirements.txt
+   ```
+
+3. **配置环境变量**
+   ```bash
+   cp .env.example .env
+   # 编辑 .env 文件，填入你的飞书应用凭证
+   ```
+
+4. **启动飞书机器人**
+   ```bash
+   python bot.py
+   ```
+
+5. **在飞书开放平台配置事件订阅**
+   - 进入应用详情页 → 事件与回调 → 事件配置
+   - 添加事件：`im.message.receive_v1`（接收消息）
+   - 订阅方式选择「使用长连接接收事件」
+   - 保存配置（注意：必须先启动机器人服务）
+
+详细说明请参考 [飞书机器人文档](./feishubot/README.md)。
+
 ## 项目结构
 
 ```

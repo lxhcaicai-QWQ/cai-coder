@@ -12,3 +12,10 @@ tests/snake-game/
 *.db
 *.db-shm
 *.db-wal
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
