@@ -1,9 +1,11 @@
 import datetime
 import json
+import random
 from typing import Dict
 
 from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody, ReplyMessageRequest, \
-    ReplyMessageRequestBody
+    ReplyMessageRequestBody, CreateMessageReactionRequest, CreateMessageReactionRequestBuilder, EmojiBuilder, \
+    CreateMessageReactionRequestBody, Emoji, DeleteMessageReactionRequest
 
 from agent.integration.feishu.config import FeishuBotConfig
 from agent.server import get_agent
@@ -101,8 +103,14 @@ class FeishuBot:
             # 获取或创建会话 ID（使用 chat_id 作为会话 ID，支持群聊）
             session_id = chat_id
 
+            # 表情回复
+            reaction_id = self._reply_message_reaction_create(message_id=message_id)
+
             # 调用 cai-coder 获取回复
             reply = self.cai_coder.chat(session_id, final_text)
+
+            # 删除表情
+            self._reply_message_reaction_delete(message_id=message_id, reaction_id=reaction_id)
 
             # 发送回复
             self._reply_message(message_id, reply)
@@ -113,6 +121,45 @@ class FeishuBot:
             print(f"处理消息时出错: {e}")
             import traceback
             traceback.print_exc()
+
+    def _reply_message_reaction_create(self, message_id: str) -> str:
+        emojis = ["MeMeMe","Typing","OneSecond","SLIGHT","ClownFace","SHOCKED","HUG","EMBARRASSED","SMIRK","WOW","KISS"]
+        emoji_type = random.choice(emojis)
+        request = (
+            CreateMessageReactionRequest.builder()
+            .message_id(message_id)
+            .request_body(
+                CreateMessageReactionRequestBody.builder()
+                .reaction_type(
+                    Emoji.builder().emoji_type(emoji_type).build()
+                ).build()
+            )
+            .build()
+        )
+
+        response = self.client2.im.v1.message_reaction.create(request)
+
+        if not response.success():
+            print(f"添加表情失败: code={response.code}, msg={response.msg}")
+            return ""
+        else:
+            print("添加表情成功 👍")
+            return response.data.reaction_id
+
+    def _reply_message_reaction_delete(self, message_id: str, reaction_id: str):
+        request = (
+            DeleteMessageReactionRequest.builder()
+            .message_id(message_id)
+            .reaction_id(reaction_id)
+            .build()
+        )
+
+        response = self.client2.im.v1.message_reaction.delete(request)
+
+        if not response.success():
+            print(f"删除表情失败: code={response.code}, msg={response.msg}")
+        else:
+            print("删除表情成功 👍")
 
 
     def _reply_message(self, message_id: str, text: str):
