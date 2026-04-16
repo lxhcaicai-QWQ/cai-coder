@@ -4,11 +4,11 @@
 
 ## Project Overview
 
-**cai-coder** is an AI coding agent built with **Python 3.11+**, powered by **LangChain** + **LangGraph**. It features a progressive skill-loading mechanism, a set of built-in tools (file I/O, shell, HTTP, weather), MCP tool integration, a middleware-based architecture for extensible agent behavior, and an OpenAI-compatible Web API via FastAPI.
+**cai-coder** is an AI coding agent built with **Python 3.11+**, powered by **LangChain** + **LangGraph**. It features a progressive skill-loading mechanism, a set of built-in tools (file I/O, shell, HTTP, weather), MCP tool integration, a middleware-based architecture for extensible agent behavior, an OpenAI-compatible Web API via FastAPI, and a **Feishu (Lark) bot integration** for chat-based interaction.
 
 - **Primary language**: Python 3.11+
 - **Key frameworks**: LangChain (`>=1.2.9`), LangGraph (`>=1.0.8`), langchain-openai (`==1.1.10`), FastAPI (`>=0.115.0`)
-- **Key libraries**: langgraph-checkpoint-sqlite (`>=3.0.3`), langchain-mcp-adapters (`>=0.2.0`), pyyaml (`>=6.0`), requests (`>=2.31.0`), uvicorn (`>=0.32.0`)
+- **Key libraries**: langgraph-checkpoint-sqlite (`>=3.0.3`), langchain-mcp-adapters (`>=0.2.0`), lark-oapi (`>=1.0.0`), pyyaml (`>=6.0`), requests (`>=2.31.0`), uvicorn (`>=0.32.0`)
 - **Build system**: Hatchling (`pyproject.toml`)
 
 ## Project Structure
@@ -16,6 +16,7 @@
 ```
 cai-coder/
 ├── agent/                   # Core agent package
+│   ├── main.py              # Unified entry: starts Web API + Feishu bot (threaded)
 │   ├── cli.py               # CLI entry point (interactive async REPL)
 │   ├── server.py            # Agent factory (LLM, tools, middleware, memory)
 │   ├── prompt.py            # System prompt construction (modular sections)
@@ -34,6 +35,10 @@ cai-coder/
 │   │   ├── agents-md-generator/
 │   │   ├── python-patterns/
 │   │   └── python-testing/
+│   ├── integration/         # External platform integrations
+│   │   └── feishu/          # Feishu (Lark) bot
+│   │       ├── bot.py       # WebSocket bot: message handling, queue, reply
+│   │       └── config.py    # Feishu app credentials & session config
 │   └── utils/
 │       ├── common_util.py   # Project root finder
 │       ├── mcp_util.py      # MCP tool loader (reads mcp.json)
@@ -55,6 +60,7 @@ cai-coder/
 ├── pyproject.toml           # Project metadata & dependencies
 ├── mcp.json                 # MCP server configuration
 ├── Dockerfile               # Docker image definition
+├── docker-compose.yaml      # Docker Compose deployment
 ├── .example.env             # Environment variable template
 ├── .local.env               # Local environment (git-ignored)
 └── AGENTS.md                # This file — AI agent conventions
@@ -74,6 +80,8 @@ Copy `.example.env` to `.local.env` and fill in:
 | `OPENAI_API_KEY` | API key for the LLM provider |
 | `OPENAI_BASE_URL` | Custom base URL for the LLM API endpoint |
 | `OPENAI_MODEL` | Model name to use |
+| `FEISHU_APP_ID` | Feishu (Lark) application ID |
+| `FEISHU_APP_SECRET` | Feishu (Lark) application secret |
 | `WORKING_DIR` | (Optional) Override the working directory for the agent |
 
 ## Common Commands
@@ -94,7 +102,15 @@ python -m agent.cli
 
 > The CLI uses `AsyncSqliteSaver` with `cai-coder-sqlite.db` for persistent conversation state. Enter `exit` to quit.
 
-### Run the Web API server
+### Run the unified entry (Web API + Feishu bot)
+
+```bash
+python agent/main.py
+```
+
+> Starts both the FastAPI Web API server (port 8000) and the Feishu WebSocket bot in a daemon thread.
+
+### Run the Web API server only
 
 ```bash
 python -m agent.webapp
@@ -120,8 +136,14 @@ pytest tests/test_agent.py
 ### Docker
 
 ```bash
-docker build -t cai-coder .
-docker run --env-file .local.env -it cai-coder python -m agent.cli
+# Build image
+docker build -t cai-coder:0.2 .
+
+# Run with Docker Compose
+docker compose up -d
+
+# Or run directly
+docker run --env-file .local.env -p 8000:8000 -it cai-coder:0.2 python agent/main.py
 ```
 
 > The Dockerfile uses Tsinghua PyPI mirror (`pypi.tuna.tsinghua.edu.cn`) for faster builds in China.
@@ -167,8 +189,16 @@ A FastAPI application providing an **OpenAI-compatible** chat completions API:
 - Streaming uses SSE (`text/event-stream`) with `ChatCompletionChunk` events.
 - CORS is enabled for all origins.
 
+### Feishu Bot (`agent/integration/feishu/`)
+A **Feishu (Lark) long-connection WebSocket bot** that receives messages, forwards them to the cai-coder agent, and replies with the agent's response:
+
+- **`bot.py`**: Core bot logic — connects via `lark.ws.Client`, processes incoming messages through a blocking queue (max 100), and replies with markdown-formatted responses. Includes emoji reactions to indicate processing.
+- **`config.py`**: Reads `FEISHU_APP_ID` and `FEISHU_APP_SECRET` from environment variables.
+- **Session management**: Uses `chat_id` as session ID for per-group conversation isolation.
+- **Unified launch**: `agent/main.py` starts the Feishu bot in a daemon thread alongside the Web API server.
+
 ### Config via env
-All runtime configuration (LLM credentials, model, working dir) is sourced from environment variables. Never hardcode secrets.
+All runtime configuration (LLM credentials, model, working dir, Feishu credentials) is sourced from environment variables. Never hardcode secrets.
 
 ## Rules for Agents
 
@@ -178,5 +208,6 @@ All runtime configuration (LLM credentials, model, working dir) is sourced from 
 - **Do** run `pytest` after making changes to `agent/` to verify nothing is broken.
 - **Do** follow the existing pattern when adding new tools (one module per tool, export from `__init__.py`, register in `server.py`).
 - **Do** follow the existing pattern when adding new skills (subdirectory under `agent/skills/` with a `SKILL.md` containing YAML frontmatter).
+- **Do** follow the existing pattern when adding new integrations (subdirectory under `agent/integration/`).
 - Code identifiers and error messages should be in **English**; user-facing explanations in **Chinese**.
 - Keep the project compatible with Python 3.11+ (no version-exclusive syntax beyond 3.11).
