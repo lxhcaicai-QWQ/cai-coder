@@ -1,6 +1,8 @@
 import datetime
 import json
+import queue
 import random
+import threading
 from typing import Dict
 
 from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody, ReplyMessageRequest, \
@@ -25,6 +27,13 @@ class FeishuBot:
     """飞书长连接机器人"""
 
     def __init__(self):
+
+        # 同步阻塞队列， 处理100条消息
+        self.task_queue = queue.Queue(maxsize=100)
+
+        self._consumer_thread = threading.Thread(target=self._consumer, daemon=True)
+        self._consumer_thread.start()
+
         # 验证配置
         FeishuBotConfig.validate()
 
@@ -107,22 +116,16 @@ class FeishuBot:
             # print(f"[收到消息] chat_id={chat_id}, message_id={message_id}, sender={sender.user_id}, text={text}")
             print(f"[收到消息] chat_id={chat_id}, message_id={message_id}, sender={sender.sender_id.user_id}, text={final_text}")
 
-            # 获取或创建会话 ID（使用 chat_id 作为会话 ID，支持群聊）
-            session_id = chat_id
-
             # 表情回复
             reaction_id = self._reply_message_reaction_create(message_id=message_id)
 
-            # 调用 cai-coder 获取回复
-            reply = self.cai_coder.chat(session_id, final_text)
-
-            # 删除表情
-            self._reply_message_reaction_delete(message_id=message_id, reaction_id=reaction_id)
-
-            # 发送回复
-            self._reply_message(message_id, reply)
-
-            print(f"[发送回复] message_id={message_id}, reply={reply}")
+            # 放入同步阻塞队列处理
+            self.task_queue.put({
+                "chat_id":chat_id,
+                "message_id":message_id,
+                "text": final_text,
+                "reaction_id":reaction_id,
+            })
 
             self.task_db.add(message_id)
 
@@ -130,6 +133,32 @@ class FeishuBot:
             print(f"处理消息时出错: {e}")
             import traceback
             traceback.print_exc()
+
+    def _consumer(self):
+        """消费者"""
+        while True:
+            item = self.task_queue.get()
+            try:
+                # 获取或创建会话 ID（使用 chat_id 作为会话 ID，支持群聊）
+                session_id = item["chat_id"]
+
+                message_id = item["message_id"]
+                text = item["text"]
+                reaction_id = item["reaction_id"]
+
+                # 调用 cai-coder 获取回复
+                reply = self.cai_coder.chat(session_id, text)
+
+                # 删除表情
+                self._reply_message_reaction_delete(message_id=message_id, reaction_id=reaction_id)
+
+                # 发送回复
+                self._reply_message(message_id, reply)
+
+                print(f"[发送回复] message_id={message_id}, reply={reply}")
+
+            finally:
+                self.task_queue.task_done()
 
     def _reply_message_reaction_create(self, message_id: str) -> str:
         emojis = ["MeMeMe","Typing","OneSecond","SLIGHT","ClownFace","SHOCKED","HUG","EMBARRASSED","SMIRK","WOW","KISS"]
