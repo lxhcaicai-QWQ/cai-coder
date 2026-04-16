@@ -208,13 +208,24 @@ class FeishuBot:
             chat_id: 聊天 ID
             text: 消息文本
         """
-        reply = {"text": text}
+        reply = {
+            "zh_cn": {
+                "content": [
+                    [{
+                        "tag": "md",
+                        "text": text
+                    }]
+                ]
+            }
+        }
+
+
         content = json.dumps(reply, ensure_ascii=False, indent=2)
         try:
             request = ReplyMessageRequest.builder() \
                 .message_id(message_id) \
                 .request_body(ReplyMessageRequestBody.builder()
-                              .msg_type("text") # 指定消息类型为文本
+                              .msg_type("post") # 指定消息类型为文本
                               .content(content)  # 填入 JSON 字符串
                               .build()) \
                 .build()
