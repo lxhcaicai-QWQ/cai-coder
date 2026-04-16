@@ -21,7 +21,7 @@
 
 ## What is cai-coder?
 
-**cai-coder** is an AI-powered coding agent built with **Python**, **LangChain**, and **LangGraph**. It features a unique **progressive skill-loading** mechanism that keeps the agent lightweight by default, only loading specialized capabilities when needed. It also supports **MCP (Model Context Protocol)** tool integration for seamless extension, and provides an **OpenAI-compatible Web API** via FastAPI.
+**cai-coder** is an AI-powered coding agent built with **Python**, **LangChain**, and **LangGraph**. It features a unique **progressive skill-loading** mechanism that keeps the agent lightweight by default, only loading specialized capabilities when needed. It also supports **MCP (Model Context Protocol)** tool integration for seamless extension, provides an **OpenAI-compatible Web API** via FastAPI, and includes a **Feishu (Lark) bot integration** for chat-based interaction.
 
 ## Key Features
 
@@ -29,10 +29,11 @@
 - **Built-in Toolset** — File I/O, shell execution, HTTP requests, weather queries, and more.
 - **MCP Tool Integration** — Connect external MCP servers to extend agent capabilities via `mcp.json`.
 - **OpenAI-Compatible Web API** — FastAPI-powered HTTP API with streaming (SSE) and non-streaming modes, compatible with the OpenAI `/v1/chat/completions` interface.
+- **Feishu (Lark) Bot** — Long-connection WebSocket bot for Feishu, enabling chat-based AI coding assistance directly in Feishu groups.
 - **Middleware Architecture** — Extensible middleware pipeline: skill loading, task tracking, tool/model retry with exponential backoff.
 - **Persistent Conversation Memory** — Stateful conversations powered by LangGraph's `AsyncSqliteSaver` with SQLite persistence (CLI mode).
-- **CLI & API Dual Interface** — Interactive async REPL for real-time coding assistance, plus HTTP API for programmatic integration.
-- **Docker Support** — Containerized deployment out of the box.
+- **CLI & API & Bot Triple Interface** — Interactive async REPL for real-time coding assistance, HTTP API for programmatic integration, and Feishu bot for team collaboration.
+- **Docker Support** — Containerized deployment out of the box, including Docker Compose.
 
 ## How It Works
 
@@ -109,11 +110,23 @@ Edit `.local.env`:
 OPENAI_API_KEY=your-api-key
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_MODEL=gpt-4
+
+# Feishu bot (optional, required for Feishu integration)
+FEISHU_APP_ID=your-app-id
+FEISHU_APP_SECRET=your-app-secret
 ```
 
 > `.local.env` is git-ignored and should **never** be committed.
 
-### 3. Run the CLI Agent
+### 3. Run the Unified Entry (Web API + Feishu Bot)
+
+```bash
+python agent/main.py
+```
+
+This starts both the **FastAPI Web API server** (port 8000) and the **Feishu WebSocket bot** in a daemon thread.
+
+### 4. Run the CLI Agent
 
 ```bash
 python -m agent.cli
@@ -129,7 +142,7 @@ Start chatting with the agent:
 
 > The CLI uses `AsyncSqliteSaver` with `cai-coder-sqlite.db` for persistent conversation state across sessions.
 
-### 4. Run the Web API Server
+### 5. Run the Web API Server Only
 
 ```bash
 python -m agent.webapp
@@ -171,6 +184,34 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 
 > The Web API uses `InMemorySaver` (ephemeral — no persistent state across restarts). CORS is enabled for all origins.
 
+## Feishu Bot
+
+cai-coder includes a **Feishu (Lark) long-connection WebSocket bot** that allows users to interact with the AI agent directly in Feishu group chats.
+
+### Features
+
+- Receives messages via Feishu WebSocket long connection
+- Forwards messages to the cai-coder agent and replies with markdown-formatted responses
+- Per-group session isolation using `chat_id` as session ID
+- Emoji reactions to indicate message processing status
+- Message deduplication to handle WebSocket event replay
+
+### Setup
+
+1. Create a Feishu app in the [Feishu Open Platform](https://open.feishu.cn/)
+2. Enable the bot capability and configure message event subscriptions
+3. Set `FEISHU_APP_ID` and `FEISHU_APP_SECRET` in `.local.env`
+4. Start via `python agent/main.py` (starts both Web API and Feishu bot)
+
+### Architecture
+
+```
+Feishu Message → WebSocket Client → Blocking Queue → CaiCoderClient → Agent → Reply
+```
+
+- **`bot.py`**: Core bot logic — connects via `lark.ws.Client`, processes messages through a blocking queue (max 100), and replies with markdown.
+- **`config.py`**: Reads Feishu credentials from environment variables.
+
 ## MCP Integration
 
 cai-coder supports [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) tools. Configure MCP servers in `mcp.json`:
@@ -192,13 +233,13 @@ MCP tools are automatically loaded at startup via `langchain-mcp-adapters` and m
 
 ```bash
 # Build the image
-docker build -t cai-coder .
+docker build -t cai-coder:0.2 .
 
-# Run the CLI agent
-docker run --env-file .local.env -it cai-coder python -m agent.cli
+# Run with Docker Compose
+docker compose up -d
 
-# Run the Web API server
-docker run --env-file .local.env -p 8000:8000 cai-coder uvicorn agent.webapp:app --host 0.0.0.0 --port 8000
+# Or run directly
+docker run --env-file .local.env -p 8000:8000 -it cai-coder:0.2 python agent/main.py
 ```
 
 > The Dockerfile uses Tsinghua PyPI mirror for faster builds.
@@ -224,6 +265,7 @@ pytest tests/test_agent.py
 ```
 cai-coder/
 ├── agent/                        # Core agent package
+│   ├── main.py                   # Unified entry: Web API + Feishu bot (threaded)
 │   ├── cli.py                    # CLI entry point (interactive async REPL)
 │   ├── server.py                 # Agent factory (LLM, tools, middleware, memory)
 │   ├── prompt.py                 # System prompt construction (modular sections)
@@ -243,6 +285,10 @@ cai-coder/
 │   │   ├── agents-md-generator/  #   AGENTS.md generation skill
 │   │   ├── python-patterns/      #   Python best practices skill
 │   │   └── python-testing/       #   Python testing skill
+│   ├── integration/              # External platform integrations
+│   │   └── feishu/               #   Feishu (Lark) bot
+│   │       ├── bot.py            #     WebSocket bot: message handling, queue, reply
+│   │       └── config.py         #     Feishu app credentials & session config
 │   └── utils/                    # Utility functions
 │       ├── common_util.py        #   Project root finder
 │       ├── mcp_util.py           #   MCP tool loader (reads mcp.json)
@@ -263,6 +309,7 @@ cai-coder/
 ├── mcp.json                      # MCP server configuration
 ├── pyproject.toml                # Project metadata & dependencies
 ├── Dockerfile                    # Docker image definition
+├── docker-compose.yaml           # Docker Compose deployment
 ├── .example.env                  # Environment variable template
 ├── .local.env                    # Local environment (git-ignored)
 └── AGENTS.md                     # AI agent conventions
@@ -275,7 +322,7 @@ cai-coder/
 | Mode | Checkpointer | Persistence |
 |---|---|---|
 | **CLI** | `AsyncSqliteSaver` (`cai-coder-sqlite.db`) | Persistent across sessions |
-| **Web API** | `InMemorySaver` | Ephemeral (lost on restart) |
+| **Web API / Feishu Bot** | `InMemorySaver` | Ephemeral (lost on restart) |
 
 ### Web API
 
@@ -288,13 +335,15 @@ A FastAPI application providing an **OpenAI-compatible** chat completions API:
 
 ### Config via Env
 
-All runtime configuration (LLM credentials, model, working dir) is sourced from environment variables. Never hardcode secrets.
+All runtime configuration (LLM credentials, model, working dir, Feishu credentials) is sourced from environment variables. Never hardcode secrets.
 
 | Variable | Description |
 |---|---|
 | `OPENAI_API_KEY` | API key for the LLM provider |
 | `OPENAI_BASE_URL` | Custom base URL for the LLM API endpoint |
 | `OPENAI_MODEL` | Model name to use |
+| `FEISHU_APP_ID` | Feishu (Lark) application ID |
+| `FEISHU_APP_SECRET` | Feishu (Lark) application secret |
 | `WORKING_DIR` | (Optional) Override the working directory for the agent |
 
 ## Extending
@@ -323,6 +372,12 @@ Detailed instructions for the agent...
 ```
 
 3. The `SkillMiddleware` will automatically discover and include it.
+
+### Add a New Integration
+
+1. Create a new directory under `agent/integration/` (e.g., `my-platform/`)
+2. Implement the bot/client logic following the existing pattern (see `agent/integration/feishu/`)
+3. Register the startup logic in `agent/main.py`
 
 ### Add an MCP Server
 
