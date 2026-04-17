@@ -1,3 +1,5 @@
+import os
+
 from loguru import logger
 import sys
 from typing import Optional
@@ -53,7 +55,9 @@ def setup_logger(
     return logger
 
 # 默认配置
-setup_logger()
+setup_logger(
+    level= "INFO" if os.getenv("LOG_LEVEL") == '' else os.getenv("LOG_LEVEL")
+)
 
 def get_logger(name: str = "cai-coder"):
     """
