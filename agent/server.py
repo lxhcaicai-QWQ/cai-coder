@@ -19,6 +19,9 @@ from .tools import (
     http_post
 )
 from .prompt import construct_system_prompt
+from .utils.logger import get_logger
+
+logger = get_logger("server")
 
 _REQUIRED_ENV_VARS = ("OPENAI_BASE_URL", "OPENAI_API_KEY", "OPENAI_MODEL")
 
@@ -26,10 +29,12 @@ _REQUIRED_ENV_VARS = ("OPENAI_BASE_URL", "OPENAI_API_KEY", "OPENAI_MODEL")
 def _check_env_vars() -> None:
     missing = [var for var in _REQUIRED_ENV_VARS if not os.getenv(var)]
     if missing:
+        logger.error(f"缺少必需的环境变量: {', '.join(missing)}")
         raise EnvironmentError(
             f"Missing required environment variable(s): {', '.join(missing)}. "
             "Please set them in .local.env or your shell environment."
         )
+    logger.debug("环境变量检查通过")
 
 
 def _build_llm() -> ChatOpenAI:
@@ -42,6 +47,7 @@ def _build_llm() -> ChatOpenAI:
     )
 
 def get_agent(checkpointer: Checkpointer = InMemorySaver(), mcptools: list[BaseTool] = None):
+    logger.debug("正在创建 Agent 实例...")
 
     agent_tools = [
         get_weather,
@@ -55,9 +61,12 @@ def get_agent(checkpointer: Checkpointer = InMemorySaver(), mcptools: list[BaseT
     ]
 
     if mcptools:
+        logger.debug(f"添加 {len(mcptools)} 个 MCP 工具")
         agent_tools.extend(mcptools)
 
-    return create_agent(
+    logger.debug(f"Agent 工具总数: {len(agent_tools)}")
+
+    agent = create_agent(
         model=_build_llm(),
         system_prompt=construct_system_prompt(),
         tools=agent_tools,
@@ -77,3 +86,6 @@ def get_agent(checkpointer: Checkpointer = InMemorySaver(), mcptools: list[BaseT
         ],
         checkpointer=checkpointer
     )
+
+    logger.debug("Agent 实例创建成功")
+    return agent

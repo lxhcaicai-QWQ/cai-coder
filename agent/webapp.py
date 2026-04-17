@@ -10,6 +10,9 @@ from starlette.responses import StreamingResponse
 
 from agent import server
 from agent.utils.mcp_util import load_mcp_tools
+from agent.utils.logger import get_logger
+
+logger = get_logger("webapp")
 
 
 # Pydantic models for OpenAI-compatible API
@@ -68,6 +71,7 @@ app.add_middleware(
 @app.get("/health")
 async def health():
     """Health check endpoint"""
+    logger.debug("健康检查请求")
     return {"status": "healthy"}
 
 
@@ -87,13 +91,16 @@ async def list_models():
     }
 
 async def get_agent():
+    logger.debug("正在加载 MCP 工具...")
     mcp_tools = await load_mcp_tools()
+    logger.debug(f"成功加载 {len(mcp_tools)} 个 MCP 工具")
 
     agent_instance = server.get_agent(
         checkpointer= InMemorySaver(),
         mcptools=mcp_tools
     )
 
+    logger.debug("Agent 实例创建成功")
     return agent_instance
 
 
@@ -197,6 +204,7 @@ async def get_chat_completion(
     import time
 
     created_timestamp = int(time.time())
+    logger.info(f"收到非流式聊天请求: completion_id={completion_id}, model={model}, 消息数={len(messages)}")
 
     try:
         # Get agent instance
@@ -240,9 +248,11 @@ async def get_chat_completion(
             )
         )
 
+        logger.info(f"聊天请求处理完成: completion_id={completion_id}, 响应长度={len(full_content)}")
         return response
 
     except Exception as e:
+        logger.error(f"聊天请求处理失败: completion_id={completion_id}, 错误: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -283,6 +293,7 @@ async def chat_completions(
         return response
 
 def start(host :str = "0.0.0.0", port: int = 8000):
+    logger.info(f"Web 服务器启动中: host={host}, port={port}")
     uvicorn.run(app, host = host, port = port)
 
 if __name__ == "__main__":

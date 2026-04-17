@@ -1,63 +1,61 @@
-import logging
+from loguru import logger
 import sys
 from typing import Optional
 
-
+# 配置 loguru
 def setup_logger(
-    name: str = "cai-coder",
-    level: int = logging.INFO,
+    level: str = "INFO",
     log_file: Optional[str] = None,
+    rotation: str = "10 MB",
+    retention: str = "7 days",
     format_string: Optional[str] = None
-) -> logging.Logger:
+):
     """
-    设置并返回一个配置好的日志记录器。
+    配置 loguru 日志记录器。
 
     Args:
-        name: 日志记录器名称
-        level: 日志级别 (logging.DEBUG, logging.INFO, etc.)
+        level: 日志级别 ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
         log_file: 可选的日志文件路径
+        rotation: 日志轮转大小 (如 "10 MB")
+        retention: 日志保留时间 (如 "7 days")
         format_string: 可选的自定义格式字符串
-
-    Returns:
-        配置好的日志记录器
     """
     if format_string is None:
         format_string = (
-            "%(asctime)s - %(name)s - %(levelname)s - "
-            "%(filename)s:%(lineno)d - %(message)s"
+            "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
+            "<level>{level: <8}</level> | "
+            "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
+            "<level>{message}</level>"
         )
 
-    # 创建格式化器
-    formatter = logging.Formatter(format_string)
-
-    # 创建日志记录器
-    logger = logging.getLogger(name)
-    logger.setLevel(level)
-
-    # 清除现有的处理器（避免重复添加）
-    logger.handlers.clear()
+    # 移除默认的处理器
+    logger.remove()
 
     # 控制台处理器
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(level)
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
+    logger.add(
+        sys.stdout,
+        format=format_string,
+        level=level,
+        colorize=True
+    )
 
     # 文件处理器（可选）
     if log_file:
-        file_handler = logging.FileHandler(log_file, encoding='utf-8')
-        file_handler.setLevel(level)
-        file_handler.setFormatter(formatter)
-        logger.addHandler(file_handler)
+        logger.add(
+            log_file,
+            format=format_string,
+            level=level,
+            rotation=rotation,
+            retention=retention,
+            compression="zip"
+        )
 
     return logger
 
+# 默认配置
+setup_logger()
 
-# 默认日志记录器
-default_logger = setup_logger()
-
-
-def get_logger(name: str = "cai-coder") -> logging.Logger:
+def get_logger(name: str = "cai-coder"):
     """
     获取一个日志记录器。
 
@@ -65,6 +63,6 @@ def get_logger(name: str = "cai-coder") -> logging.Logger:
         name: 日志记录器名称
 
     Returns:
-        日志记录器实例
+        loguru logger 实例
     """
-    return logging.getLogger(name)
+    return logger.bind(name=name)
