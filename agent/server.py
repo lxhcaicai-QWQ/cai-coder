@@ -16,7 +16,8 @@ from .tools import (
     bash,
     http_request,
     http_get,
-    http_post
+    http_post,
+    restart_service
 )
 from .prompt import construct_system_prompt
 
@@ -51,7 +52,8 @@ def get_agent(checkpointer: Checkpointer = InMemorySaver(), mcptools: list[BaseT
         bash,
         http_request,
         http_get,
-        http_post
+        http_post,
+        restart_service
     ]
 
     if mcptools:

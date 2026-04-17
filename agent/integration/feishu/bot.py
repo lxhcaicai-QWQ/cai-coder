@@ -278,29 +278,21 @@ class FeishuBot:
             traceback.print_exc()
 
     def _handle_restart_command(self, chat_id: str, message_id: str):
-        """处理重启命令"""
+        """处理重启命令 - 通过 agent 调用重启工具"""
         try:
-            # 发送确认消息
-            self._reply_message(message_id, "🔄 正在重启服务...")
+            # 使用 agent 调用重启工具
+            restart_message = "请使用 restart_service 工具重启服务，延迟时间设置为 3 秒"
+            restart_response = self.cai_coder.chat(chat_id, restart_message)
 
-            # 延迟重启，让消息发送完成
-            import threading
-            import time
-            import sys
-            import os
-
-            def delayed_restart():
-                time.sleep(3)  # 等待消息发送完成
-                print("通过飞书命令重启服务...")
-                os.execv(sys.executable, [sys.executable] + sys.argv)
-
-            thread = threading.Thread(target=delayed_restart, daemon=True)
-            thread.start()
+            # 发送重启确认消息
+            self._reply_message(message_id, f"🔄 {restart_response}")
 
         except Exception as e:
             print(f"处理重启命令时出错: {e}")
             import traceback
             traceback.print_exc()
+            error_msg = f"重启命令处理失败: {str(e)}"
+            self._reply_message(message_id, error_msg)
 
     def start(self):
         """启动机器人"""
