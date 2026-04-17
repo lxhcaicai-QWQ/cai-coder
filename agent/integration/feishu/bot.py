@@ -96,6 +96,11 @@ class FeishuBot:
             if not text:
                 return
 
+            # 检查是否是重启命令
+            if text.strip().lower() in ["/restart", "重启服务", "重启"]:
+                self._handle_restart_command(chat_id, message_id)
+                return
+
             # 消息已经回复过，直接跳过，避免长链接重放
             if message_id in self.task_db:
                 print(f"[消息重复] message_id={message_id} 已经跳过")
@@ -269,6 +274,31 @@ class FeishuBot:
 
         except Exception as e:
             print(f"发送消息时出错: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _handle_restart_command(self, chat_id: str, message_id: str):
+        """处理重启命令"""
+        try:
+            # 发送确认消息
+            self._reply_message(message_id, "🔄 正在重启服务...")
+
+            # 延迟重启，让消息发送完成
+            import threading
+            import time
+            import sys
+            import os
+
+            def delayed_restart():
+                time.sleep(3)  # 等待消息发送完成
+                print("通过飞书命令重启服务...")
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+
+            thread = threading.Thread(target=delayed_restart, daemon=True)
+            thread.start()
+
+        except Exception as e:
+            print(f"处理重启命令时出错: {e}")
             import traceback
             traceback.print_exc()
 

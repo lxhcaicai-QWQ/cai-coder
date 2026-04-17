@@ -71,6 +71,26 @@ async def health():
     return {"status": "healthy"}
 
 
+@app.post("/restart")
+async def restart_service():
+    """重启服务端点"""
+    import os
+    import sys
+
+    def delayed_restart():
+        import time
+        time.sleep(2)  # 给响应时间
+        print("正在重启服务...")
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    # 在后台线程中执行重启
+    import threading
+    thread = threading.Thread(target=delayed_restart, daemon=True)
+    thread.start()
+
+    return {"status": "restarting", "message": "服务正在重启中..."}
+
+
 @app.get("/v1/models")
 async def list_models():
     """List available models"""
