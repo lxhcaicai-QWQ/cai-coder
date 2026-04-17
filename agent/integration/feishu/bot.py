@@ -11,7 +11,10 @@ from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody, 
 
 from agent.integration.feishu.config import FeishuBotConfig
 from agent.server import get_agent
+from agent.utils.logger import get_logger
 import lark_oapi as lark
+
+logger = get_logger("feishu_bot")
 
 class CaiCoderClient:
     def __init__(self):
@@ -27,6 +30,9 @@ class FeishuBot:
     """飞书长连接机器人"""
 
     def __init__(self):
+
+        # 初始化日志记录器
+        self.logger = get_logger("feishu_bot")
 
         # 同步阻塞队列， 处理100条消息
         self.task_queue = queue.Queue(maxsize=100)
@@ -98,7 +104,7 @@ class FeishuBot:
 
             # 消息已经回复过，直接跳过，避免长链接重放
             if message_id in self.task_db:
-                print(f"[消息重复] message_id={message_id} 已经跳过")
+                self.logger.info(f"[消息重复] message_id={message_id} 已经跳过")
                 return
 
             final_text = text
@@ -113,8 +119,10 @@ class FeishuBot:
                     final_text = final_text.replace(key, f"@{name}")
 
 
-            # print(f"[收到消息] chat_id={chat_id}, message_id={message_id}, sender={sender.user_id}, text={text}")
-            print(f"[收到消息] chat_id={chat_id}, message_id={message_id}, sender={sender.sender_id.user_id}, text={final_text}")
+            self.logger.info(
+                f"[收到消息] chat_id={chat_id}, message_id={message_id}, "
+                f"sender={sender.sender_id.user_id}, text={final_text}"
+            )
 
             # 表情回复
             reaction_id = self._reply_message_reaction_create(message_id=message_id)
@@ -130,9 +138,9 @@ class FeishuBot:
             self.task_db.add(message_id)
 
         except Exception as e:
-            print(f"处理消息时出错: {e}")
+            self.logger.error(f"处理消息时出错: {e}")
             import traceback
-            traceback.print_exc()
+            self.logger.error(traceback.format_exc())
 
     def _consumer(self):
         """消费者"""
@@ -155,7 +163,7 @@ class FeishuBot:
                 # 发送回复
                 self._reply_message(message_id, reply)
 
-                print(f"[发送回复] message_id={message_id}, reply={reply}")
+                self.logger.info(f"[发送回复] message_id={message_id}, reply={reply[:100]}...")
 
             finally:
                 self.task_queue.task_done()
@@ -178,10 +186,10 @@ class FeishuBot:
         response = self.client2.im.v1.message_reaction.create(request)
 
         if not response.success():
-            print(f"添加表情失败: code={response.code}, msg={response.msg}")
+            self.logger.error(f"添加表情失败: code={response.code}, msg={response.msg}")
             return ""
         else:
-            print("添加表情成功 👍")
+            self.logger.debug("添加表情成功")
             return response.data.reaction_id
 
     def _reply_message_reaction_delete(self, message_id: str, reaction_id: str):
@@ -195,9 +203,9 @@ class FeishuBot:
         response = self.client2.im.v1.message_reaction.delete(request)
 
         if not response.success():
-            print(f"删除表情失败: code={response.code}, msg={response.msg}")
+            self.logger.error(f"删除表情失败: code={response.code}, msg={response.msg}")
         else:
-            print("删除表情成功 👍")
+            self.logger.debug("删除表情成功")
 
 
     def _reply_message(self, message_id: str, text: str):
@@ -237,9 +245,9 @@ class FeishuBot:
                     f"client.im.v1.message.reply failed, code: {response.code}, msg: {response.msg}, log_id: {response.get_log_id()}")
 
         except Exception as e:
-            print(f"发送消息时出错: {e}")
+            self.logger.error(f"回复消息时出错: {e}")
             import traceback
-            traceback.print_exc()
+            self.logger.error(traceback.format_exc())
 
     def _send_message(self, chat_id: str, text: str):
         """
@@ -268,26 +276,26 @@ class FeishuBot:
                     f"client.im.v1.chat.create failed, code: {response.code}, msg: {response.msg}, log_id: {response.get_log_id()}")
 
         except Exception as e:
-            print(f"发送消息时出错: {e}")
+            self.logger.error(f"创建消息时出错: {e}")
             import traceback
-            traceback.print_exc()
+            self.logger.error(traceback.format_exc())
 
     def start(self):
         """启动机器人"""
-        print("=" * 50)
-        print("飞书长连接机器人启动中...")
-        print(f"APP_ID: {FeishuBotConfig.FEISHU_APP_ID}")
-        print(f"会话超时时间: {self.session_timeout} 秒")
-        print("=" * 50)
+        self.logger.info("=" * 50)
+        self.logger.info("飞书长连接机器人启动中...")
+        self.logger.info(f"APP_ID: {FeishuBotConfig.FEISHU_APP_ID}")
+        self.logger.info(f"会话超时时间: {self.session_timeout} 秒")
+        self.logger.info("=" * 50)
 
         try:
             self.client.start()
         except KeyboardInterrupt:
-            print("\n机器人已停止")
+            self.logger.info("机器人已停止")
         except Exception as e:
-            print(f"机器人运行出错: {e}")
+            self.logger.error(f"机器人运行出错: {e}")
             import traceback
-            traceback.print_exc()
+            self.logger.error(traceback.format_exc())
 
 
 def main():
