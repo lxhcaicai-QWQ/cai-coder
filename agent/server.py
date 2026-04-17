@@ -1,7 +1,8 @@
 import os
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import TodoListMiddleware, ToolRetryMiddleware, ModelRetryMiddleware
+from langchain.agents.middleware import TodoListMiddleware, ToolRetryMiddleware, ModelRetryMiddleware, \
+    SummarizationMiddleware, ContextEditingMiddleware, ClearToolUsesEdit
 from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
@@ -73,6 +74,24 @@ def get_agent(checkpointer: Checkpointer = InMemorySaver(), mcptools: list[BaseT
                 max_retries=3,
                 initial_delay=1.0,  # 第一次重试前的初始延迟（以秒为单位）
                 backoff_factor=2.0  # 指数退避乘数。每次重试等待 initial_delay * (backoff_factor ** retry_number) 秒。
+            ),
+            SummarizationMiddleware(
+                model=_build_llm(),
+                trigger= [
+                    ("tokens",128000)
+                ],
+                keep=("tokens", 500000)
+            ),
+            ContextEditingMiddleware(
+                edits=[
+                    ClearToolUsesEdit(
+                        trigger=500000,
+                        keep=5,
+                        clear_tool_inputs=False,
+                        exclude_tools=[],
+                        placeholder="[cleared]",
+                    )
+                ]
             )
         ],
         checkpointer=checkpointer
