@@ -12,3 +12,5 @@ tests/snake-game/
 *.db
 *.db-shm
 *.db-wal
+
+/skills/
