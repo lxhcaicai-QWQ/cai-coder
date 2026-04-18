@@ -13,10 +13,10 @@ class MessageBus:
         self.inbound.put(msg)
 
     def consume_inbound(self) -> InMessage:
-        self.inbound.get()
+        return self.inbound.get()
 
     def publish_outbound(self, msg: OutMessage) -> None:
         self.outbound.put(msg)
 
     def consume_outbound(self) -> OutMessage:
-        self.outbound.get()
+        return self.outbound.get()

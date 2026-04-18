@@ -1,18 +1,18 @@
+from abc import abstractmethod, ABC
 from typing import Any
 
 from agent.bus.bus import MessageBus
 from agent.bus.events import OutMessage, InMessage
 
 
-class BaseChannel:
+class BaseChannel(ABC):
 
     name: str = "base"
 
-    def __init__(self, config: Any, bus: MessageBus):
-        self.config = config
+    def __init__(self, bus: MessageBus):
         self.bus = bus
 
-
+    @abstractmethod
     def send(self, msg: OutMessage) -> None:
         """
         Send a message through this channel.
@@ -38,3 +38,11 @@ class BaseChannel:
         )
 
         self.bus.publish_inbound(msg)
+
+
+    @abstractmethod
+    async def start(self) -> None:
+        """
+        Start the channel and begin listening for messages.
+        """
+        pass

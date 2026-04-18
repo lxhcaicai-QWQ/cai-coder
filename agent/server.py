@@ -1,4 +1,5 @@
 import os
+import threading
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import TodoListMiddleware, ToolRetryMiddleware, ModelRetryMiddleware, \
@@ -8,6 +9,8 @@ from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Checkpointer
 
+from .bus.bus import MessageBus
+from .bus.events import OutMessage
 from .middleware import SkillMiddleware
 from .tools import (
     get_weather,
@@ -108,3 +111,36 @@ def get_agent(checkpointer: Checkpointer = InMemorySaver(), mcptools: list[BaseT
 
     logger.debug("Agent 实例创建成功")
     return agent
+
+
+class AgentLoop:
+
+    def __init__(self,bus: MessageBus):
+        self.bus = bus
+
+        self.agent = get_agent()
+
+
+    def run(self):
+        while True:
+            msg = self.bus.consume_inbound()
+            if msg is None:
+                continue
+            content = msg.content
+            chat_id = msg.chat_id
+
+            config = {"configurable": {"thread_id": chat_id}}
+            response = self.agent.invoke({"messages": [{"role": "user", "content": content}]}, config=config)
+
+            out_message = OutMessage(
+                channel=msg.channel,
+                chat_id=chat_id,
+                content=response["messages"][-1].content,
+                metadata=msg.metadata
+            )
+            self.bus.publish_outbound(out_message)
+
+
+    def start(self):
+        thread = threading.Thread(target=self.run, daemon=True)
+        thread.start()
