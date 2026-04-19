@@ -30,7 +30,9 @@
 - **MCP 工具集成** — 通过 `mcp.json` 配置外部 MCP 服务器，扩展 Agent 能力。
 - **OpenAI 兼容 Web API** — 基于 FastAPI 的 HTTP 接口，支持流式（SSE）和非流式模式，完全兼容 OpenAI `/v1/chat/completions` 接口规范。
 - **飞书机器人** — 基于飞书长连接 WebSocket 的机器人，支持在飞书群聊中直接使用 AI 编程助手。
-- **中间件架构** — 可扩展的中间件流水线：技能加载、任务追踪、工具/模型调用自动重试（指数退避）。
+- **消息总线架构** — 中央 `MessageBus` 解耦了通道与 Agent，便于快速接入新的聊天平台。
+- **通道抽象层** — `BaseChannel` 接口支持可插拔的平台集成（飞书、Slack、Discord 等）。
+- **中间件架构** — 可扩展的中间件流水线：技能加载、任务追踪、工具/模型调用自动重试（指数退避）、上下文摘要与编辑。
 - **持久化对话记忆** — 基于 LangGraph 的 `AsyncSqliteSaver` + SQLite 持久化，支持跨会话有状态对话。
 - **CLI & API & 机器人三接口** — 提供异步交互式 REPL、HTTP API 和飞书机器人三种使用方式。
 - **Docker 支持** — 开箱即用的容器化部署方案，包含 Docker Compose 配置。
@@ -74,6 +76,8 @@
 | `TodoListMiddleware` | 管理任务追踪与进度可视化 |
 | `ToolRetryMiddleware` | 工具调用失败自动重试（最多 3 次，指数退避） |
 | `ModelRetryMiddleware` | 模型调用失败自动重试（最多 3 次，指数退避） |
+| `SummarizationMiddleware` | 对话 token 数超过阈值（128k）时自动摘要 |
+| `ContextEditingMiddleware` | 上下文超过 token 限制（500k）时清理旧工具调用，保留最近 5 条 |
 
 ## 快速开始
 
@@ -124,7 +128,7 @@ FEISHU_APP_SECRET=your-app-secret
 python agent/main.py
 ```
 
-此命令会同时启动 **FastAPI Web API 服务**（端口 8000）和**飞书 WebSocket 机器人**（守护线程）。
+此命令会启动 **MessageBus**、**ChannelManager**（发现并启动所有已注册的通道，如飞书）、**AgentLoop**（消费入站消息、调用 Agent、发布出站消息）以及 **FastAPI Web API 服务**（端口 8000）。所有通道以守护线程方式运行。
 
 ### 4. 运行 CLI Agent
 
@@ -186,12 +190,12 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 
 ## 飞书机器人
 
-cai-coder 内置了**飞书（Lark）长连接 WebSocket 机器人**，用户可以在飞书群聊中直接与 AI Agent 交互。
+cai-coder 内置了**飞书（Lark）长连接 WebSocket 通道**，实现了 `BaseChannel` 接口，用户可以在飞书群聊中直接与 AI Agent 交互。
 
 ### 功能特点
 
 - 通过飞书 WebSocket 长连接接收消息
-- 将消息转发给 cai-coder Agent，并以 Markdown 格式回复
+- 通过 MessageBus 将消息转发给 cai-coder Agent，并以 Markdown 格式回复
 - 基于 `chat_id` 的群聊级别会话隔离
 - 消息处理中的表情反馈
 - 消息去重处理，避免 WebSocket 事件重放
@@ -201,15 +205,15 @@ cai-coder 内置了**飞书（Lark）长连接 WebSocket 机器人**，用户可
 1. 在 [飞书开放平台](https://open.feishu.cn/) 创建应用
 2. 启用机器人能力并配置消息事件订阅
 3. 在 `.local.env` 中设置 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET`
-4. 通过 `python agent/main.py` 启动（同时启动 Web API 和飞书机器人）
+4. 通过 `python agent/main.py` 启动（启动 MessageBus + 所有通道 + Web API）
 
 ### 架构
 
 ```
-飞书消息 → WebSocket 客户端 → 阻塞队列 → CaiCoderClient → Agent → 回复
+飞书消息 → FeishuChannel → MessageBus.inbound → AgentLoop → Agent → MessageBus.outbound → ChannelManager → FeishuChannel.send()
 ```
 
-- **`bot.py`**：核心机器人逻辑 — 通过 `lark.ws.Client` 连接，使用阻塞队列（最大 100 条）处理消息，以 Markdown 格式回复。
+- **`bot.py`**（`FeishuChannel`）：通过 `lark.ws.Client` 连接，使用 `BaseChannel._handle_message()` 处理消息，以 Markdown 格式回复。
 - **`config.py`**：从环境变量读取飞书应用凭证。
 
 ## MCP 集成
@@ -265,11 +269,14 @@ pytest tests/test_agent.py
 ```
 cai-coder/
 ├── agent/                        # 核心 Agent 包
-│   ├── main.py                   # 统一入口：Web API + 飞书机器人（线程化）
+│   ├── main.py                   # 统一入口：MessageBus + ChannelManager + AgentLoop + Web API
 │   ├── cli.py                    # CLI 入口（异步交互式 REPL）
-│   ├── server.py                 # Agent 工厂（LLM、工具、中间件、记忆）
+│   ├── server.py                 # Agent 工厂（LLM、工具、中间件、记忆）+ AgentLoop
 │   ├── prompt.py                 # 系统提示词构建（模块化）
 │   ├── webapp.py                 # OpenAI 兼容 Web API（FastAPI + SSE 流式）
+│   ├── bus/                      # 消息总线（通道与 Agent 通信）
+│   │   ├── bus.py                #   MessageBus（入站/出站队列）
+│   │   └── events.py             #   InMessage / OutMessage 数据类
 │   ├── middleware/                # 中间件
 │   │   ├── __init__.py           #   中间件导出
 │   │   └── skill_middleware.py   #   SkillMiddleware — 渐进式技能加载
@@ -285,12 +292,16 @@ cai-coder/
 │   │   ├── agents-md-generator/  #   AGENTS.md 生成技能
 │   │   ├── python-patterns/      #   Python 最佳实践技能
 │   │   └── python-testing/       #   Python 测试技能
-│   ├── integration/              # 外部平台集成
-│   │   └── feishu/               #   飞书机器人
-│   │       ├── bot.py            #     WebSocket 机器人：消息处理、队列、回复
+│   ├── integration/              # 外部平台集成（通道抽象）
+│   │   ├── base.py               #   BaseChannel 抽象基类
+│   │   ├── manager.py            #   ChannelManager（发现、启动、分发）
+│   │   ├── register.py           #   通道注册表（发现所有通道）
+│   │   └── feishu/               #   飞书通道
+│   │       ├── bot.py            #     FeishuChannel(BaseChannel)：WS 机器人、表情、回复
 │   │       └── config.py         #     飞书应用凭证与会话配置
 │   └── utils/                    # 工具函数
 │       ├── common_util.py        #   项目根目录查找器
+│       ├── logger.py             #   loguru 日志配置与 get_logger 工具
 │       ├── mcp_util.py           #   MCP 工具加载器（读取 mcp.json）
 │       └── skill.py              #   技能发现、解析、渲染
 ├── app/                          # 应用层（演示项目）
@@ -300,7 +311,9 @@ cai-coder/
 │   ├── skills/                   #   技能相关测试
 │   ├── test_agent.py
 │   ├── test_agent_generate_code.py
+│   ├── test_agent_loop.py
 │   ├── test_agent_mcp.py
+│   ├── test_feishu_channel.py
 │   ├── test_http_request.py
 │   ├── test_skills_loader.py
 │   ├── test_tools.py
@@ -317,12 +330,27 @@ cai-coder/
 
 ## 架构说明
 
+### 消息总线与通道抽象
+
+统一入口（`agent/main.py`）使用中央 `MessageBus` 解耦通道与 Agent：
+
+```
+Channel (feishu, ...) ──publish_inbound──> MessageBus.inbound ──consume──> AgentLoop ──invoke──> Agent
+AgentLoop ──publish_outbound──> MessageBus.outbound ──consume──> ChannelManager ──dispatch──> Channel.send()
+```
+
+- **`MessageBus`**（`agent/bus/bus.py`）：两个 `queue.Queue` 实例 — `inbound` 和 `outbound`。
+- **`BaseChannel`**（`agent/integration/base.py`）：抽象基类，包含 `send(msg)` 和 `start()` 方法。所有平台集成均实现此接口。
+- **`ChannelManager`**（`agent/integration/manager.py`）：发现所有通道，在守护线程中启动，分发出站消息。
+- **`AgentLoop`**（`agent/server.py`）：在守护线程中运行，消费 `inbound` 消息，调用 Agent，发布到 `outbound`。
+
 ### 记忆与检查点
 
 | 模式 | 检查点存储 | 持久性 |
 |---|---|---|
 | **CLI** | `AsyncSqliteSaver`（`cai-coder-sqlite.db`） | 跨会话持久化 |
-| **Web API / 飞书机器人** | `InMemorySaver` | 内存存储（重启后丢失） |
+| **Web API** | `InMemorySaver` | 内存存储（重启后丢失） |
+| **飞书 / 通道模式** | `InMemorySaver`（通过 `AgentLoop` 中的 `get_agent()`） | 内存存储（重启后丢失） |
 
 ### Web API
 
@@ -335,7 +363,7 @@ cai-coder/
 
 ### 环境变量配置
 
-所有运行时配置（LLM 凭证、模型、工作目录、飞书凭证）均通过环境变量获取，切勿硬编码密钥。
+所有运行时配置（LLM 凭证、模型、工作目录、飞书凭证、日志级别）均通过环境变量获取，切勿硬编码密钥。
 
 | 变量 | 说明 |
 |---|---|
@@ -345,6 +373,7 @@ cai-coder/
 | `FEISHU_APP_ID` | 飞书应用 App ID |
 | `FEISHU_APP_SECRET` | 飞书应用 App Secret |
 | `WORKING_DIR` | （可选）覆盖 Agent 的工作目录 |
+| `LOG_LEVEL` | （可选）loguru 日志级别（`DEBUG`、`INFO`、`WARNING`、`ERROR`） |
 
 ## 扩展指南
 
@@ -373,11 +402,16 @@ Agent 的详细执行指南...
 
 3. `SkillMiddleware` 会自动发现并将其纳入可用技能列表。
 
-### 添加新集成
+### 添加新通道集成
 
 1. 在 `agent/integration/` 下创建新目录（如 `my-platform/`）
-2. 参考现有模式实现机器人/客户端逻辑（参见 `agent/integration/feishu/`）
-3. 在 `agent/main.py` 中注册启动逻辑
+2. 实现继承 `BaseChannel` 的类，包含 `send()` 和 `start()` 方法
+3. 在 `agent/integration/register.py` 中注册
+
+### 添加新中间件
+
+1. 实现 LangChain 的 `AgentMiddleware`
+2. 在 `agent/server.py` 的中间件列表中添加
 
 ### 添加 MCP 服务器
 

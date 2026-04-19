@@ -2,13 +2,15 @@ import datetime
 import json
 import queue
 import random
-import threading
 from typing import Dict
 
 from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody, ReplyMessageRequest, \
     ReplyMessageRequestBody, CreateMessageReactionRequest, CreateMessageReactionRequestBuilder, EmojiBuilder, \
     CreateMessageReactionRequestBody, Emoji, DeleteMessageReactionRequest
 
+from agent.bus.bus import MessageBus
+from agent.bus.events import OutMessage
+from agent.integration.base import BaseChannel
 from agent.integration.feishu.config import FeishuBotConfig
 from agent.server import get_agent
 from agent.utils.logger import get_logger
@@ -26,10 +28,12 @@ class CaiCoderClient:
         return response["messages"][-1].content
 
 
-class FeishuBot:
-    """飞书长连接机器人"""
 
-    def __init__(self):
+class FeishuChannel(BaseChannel):
+    name = "feishu"
+
+    def __init__(self, bus: MessageBus):
+        super().__init__(bus)
 
         # 初始化日志记录器
         self.logger = get_logger("feishu_bot")
@@ -37,14 +41,8 @@ class FeishuBot:
         # 同步阻塞队列， 处理100条消息
         self.task_queue = queue.Queue(maxsize=100)
 
-        self._consumer_thread = threading.Thread(target=self._consumer, daemon=True)
-        self._consumer_thread.start()
-
         # 验证配置
         FeishuBotConfig.validate()
-
-        # 初始化 cai-coder 客户端
-        self.cai_coder = CaiCoderClient()
 
         self.task_db = set()
 
@@ -78,6 +76,18 @@ class FeishuBot:
             .register_p2_im_message_receive_v1(self._handle_message_receive)
             .build()
         )
+
+    def  send(self, msg: OutMessage) -> None:
+        chat_id = msg.chat_id
+        content = msg.content
+        metadata = msg.metadata
+        message_id = metadata["message_id"]
+        reaction_id = metadata["reaction_id"]
+        # 删除表情
+        self._reply_message_reaction_delete(message_id=message_id, reaction_id=reaction_id)
+
+        self._reply_message(message_id, content)
+        self.logger.info(f"[发送回复] message_id={message_id}, reply={content[:100]}...")
 
     def _handle_message_receive(self, data: lark.im.v1.P2ImMessageReceiveV1):
         """
@@ -127,13 +137,16 @@ class FeishuBot:
             # 表情回复
             reaction_id = self._reply_message_reaction_create(message_id=message_id)
 
-            # 放入同步阻塞队列处理
-            self.task_queue.put({
-                "chat_id":chat_id,
-                "message_id":message_id,
-                "text": final_text,
-                "reaction_id":reaction_id,
-            })
+            self._handle_message(
+                chat_id=chat_id,
+                content=final_text,
+                metadata={
+                    "chat_id":chat_id,
+                    "message_id":message_id,
+                    "text": final_text,
+                    "reaction_id":reaction_id,
+                }
+            )
 
             self.task_db.add(message_id)
 
@@ -142,31 +155,6 @@ class FeishuBot:
             import traceback
             self.logger.error(traceback.format_exc())
 
-    def _consumer(self):
-        """消费者"""
-        while True:
-            item = self.task_queue.get()
-            try:
-                # 获取或创建会话 ID（使用 chat_id 作为会话 ID，支持群聊）
-                session_id = item["chat_id"]
-
-                message_id = item["message_id"]
-                text = item["text"]
-                reaction_id = item["reaction_id"]
-
-                # 调用 cai-coder 获取回复
-                reply = self.cai_coder.chat(session_id, text)
-
-                # 删除表情
-                self._reply_message_reaction_delete(message_id=message_id, reaction_id=reaction_id)
-
-                # 发送回复
-                self._reply_message(message_id, reply)
-
-                self.logger.info(f"[发送回复] message_id={message_id}, reply={reply[:100]}...")
-
-            finally:
-                self.task_queue.task_done()
 
     def _reply_message_reaction_create(self, message_id: str) -> str:
         emojis = ["MeMeMe","Typing","OneSecond","SLIGHT","ClownFace","SHOCKED","HUG","EMBARRASSED","SMIRK","WOW","KISS"]
@@ -280,7 +268,7 @@ class FeishuBot:
             import traceback
             self.logger.error(traceback.format_exc())
 
-    def start(self):
+    def start(self) -> None:
         """启动机器人"""
         self.logger.info("=" * 50)
         self.logger.info("飞书长连接机器人启动中...")
@@ -296,13 +284,3 @@ class FeishuBot:
             self.logger.error(f"机器人运行出错: {e}")
             import traceback
             self.logger.error(traceback.format_exc())
-
-
-def main():
-    """主函数"""
-    bot = FeishuBot()
-    bot.start()
-
-
-if __name__ == "__main__":
-    main()
