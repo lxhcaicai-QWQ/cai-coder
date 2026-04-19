@@ -8,20 +8,25 @@
 
 - **Primary language**: Python 3.11+
 - **Key frameworks**: LangChain (`>=1.2.9`), LangGraph (`>=1.0.8`), langchain-openai (`==1.1.10`), FastAPI (`>=0.115.0`)
-- **Key libraries**: langgraph-checkpoint-sqlite (`>=3.0.3`), langchain-mcp-adapters (`>=0.2.0`), lark-oapi (`>=1.0.0`), pyyaml (`>=6.0`), requests (`>=2.31.0`), uvicorn (`>=0.32.0`)
+- **Key libraries**: langgraph-checkpoint-sqlite (`>=3.0.3`), langchain-mcp-adapters (`>=0.2.0`), lark-oapi (`>=1.0.0`), pyyaml (`>=6.0`), requests (`>=2.31.0`), uvicorn (`>=0.32.0`), loguru (`>=0.7.0`)
 - **Build system**: Hatchling (`pyproject.toml`)
+- **Logging**: loguru (configured in `agent/utils/logger.py`, level via `LOG_LEVEL` env var)
 
 ## Project Structure
 
 ```
 cai-coder/
 ├── agent/                   # Core agent package
-│   ├── main.py              # Unified entry: starts Web API + Feishu bot (threaded)
+│   ├── main.py              # Unified entry: MessageBus + ChannelManager + AgentLoop + Web API
 │   ├── cli.py               # CLI entry point (interactive async REPL)
-│   ├── server.py            # Agent factory (LLM, tools, middleware, memory)
+│   ├── server.py            # Agent factory (LLM, tools, middleware, memory) + AgentLoop
 │   ├── prompt.py            # System prompt construction (modular sections)
 │   ├── webapp.py            # OpenAI-compatible Web API (FastAPI + SSE streaming)
+│   ├── bus/                 # Message bus for channel-agent communication
+│   │   ├── bus.py           # MessageBus (inbound/outbound queues)
+│   │   └── events.py        # InMessage / OutMessage dataclasses
 │   ├── middleware/           # Agent middleware
+│   │   ├── __init__.py      # Middleware exports
 │   │   └── skill_middleware.py  # SkillMiddleware — progressive skill loading
 │   ├── tools/               # Built-in tools
 │   │   ├── __init__.py      # Tool exports
@@ -33,14 +38,19 @@ cai-coder/
 │   │   └── write_file.py
 │   ├── skills/              # Skill definitions (each subdir has SKILL.md)
 │   │   ├── agents-md-generator/
+│   │   ├── green-tea-skill/
 │   │   ├── python-patterns/
 │   │   └── python-testing/
-│   ├── integration/         # External platform integrations
-│   │   └── feishu/          # Feishu (Lark) bot
-│   │       ├── bot.py       # WebSocket bot: message handling, queue, reply
+│   ├── integration/         # External platform integrations (channel abstraction)
+│   │   ├── base.py          # BaseChannel ABC (send, start, _handle_message)
+│   │   ├── manager.py       # ChannelManager (discovers, starts, dispatches)
+│   │   ├── register.py      # Channel registry (discovers all channels)
+│   │   └── feishu/          # Feishu (Lark) channel
+│   │       ├── bot.py       # FeishuChannel(BaseChannel): WS bot, reactions, reply
 │   │       └── config.py    # Feishu app credentials & session config
 │   └── utils/
 │       ├── common_util.py   # Project root finder
+│       ├── logger.py        # loguru setup & get_logger helper
 │       ├── mcp_util.py      # MCP tool loader (reads mcp.json)
 │       └── skill.py         # Skill discovery, parsing, rendering
 ├── app/                     # Application layer (e.g. snake-game demo)
@@ -51,7 +61,9 @@ cai-coder/
 │   ├── snake-game/          # Snake game tests (git-ignored)
 │   ├── test_agent.py
 │   ├── test_agent_generate_code.py
+│   ├── test_agent_loop.py
 │   ├── test_agent_mcp.py
+│   ├── test_feishu_channel.py
 │   ├── test_http_request.py
 │   ├── test_skills_loader.py
 │   ├── test_tools.py
@@ -83,6 +95,7 @@ Copy `.example.env` to `.local.env` and fill in:
 | `FEISHU_APP_ID` | Feishu (Lark) application ID |
 | `FEISHU_APP_SECRET` | Feishu (Lark) application secret |
 | `WORKING_DIR` | (Optional) Override the working directory for the agent |
+| `LOG_LEVEL` | (Optional) Log level for loguru (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 
 ## Common Commands
 
@@ -94,6 +107,14 @@ pip install -e .
 pip install -e ".[dev]"
 ```
 
+### Run the unified entry (Web API + all channels + AgentLoop)
+
+```bash
+python agent/main.py
+```
+
+> Starts the `MessageBus`, `ChannelManager` (discovers and starts all registered channels, e.g. Feishu), `AgentLoop` (consumes inbound messages, invokes agent, publishes outbound), and the FastAPI Web API server (port 8000). The Feishu bot and other channels run in daemon threads.
+
 ### Run the CLI agent
 
 ```bash
@@ -101,14 +122,6 @@ python -m agent.cli
 ```
 
 > The CLI uses `AsyncSqliteSaver` with `cai-coder-sqlite.db` for persistent conversation state. Enter `exit` to quit.
-
-### Run the unified entry (Web API + Feishu bot)
-
-```bash
-python agent/main.py
-```
-
-> Starts both the FastAPI Web API server (port 8000) and the Feishu WebSocket bot in a daemon thread.
 
 ### Run the Web API server only
 
@@ -150,6 +163,25 @@ docker run --env-file .local.env -p 8000:8000 -it cai-coder:0.2 python agent/mai
 
 ## Architecture & Conventions
 
+### Message Bus Architecture
+The unified entry (`agent/main.py`) uses a centralized `MessageBus` to decouple channels from the agent:
+
+```
+Channel (feishu, ...) ──publish_inbound──> MessageBus.inbound ──consume──> AgentLoop ──invoke──> Agent
+AgentLoop ──publish_outbound──> MessageBus.outbound ──consume──> ChannelManager ──dispatch──> Channel.send()
+```
+
+- **`MessageBus`** (`agent/bus/bus.py`): Two `queue.Queue` instances — `inbound` and `outbound`.
+- **`InMessage` / `OutMessage`** (`agent/bus/events.py`): Dataclasses carrying `channel`, `chat_id`, `content`, `metadata`.
+- **`AgentLoop`** (`agent/server.py`): Runs in a daemon thread; consumes from `inbound`, invokes the agent, publishes to `outbound`.
+
+### Channel Abstraction
+All external platform integrations implement `BaseChannel` (`agent/integration/base.py`):
+
+- **`BaseChannel`**: Abstract base with `send(msg)` and `start()` methods. Provides `_handle_message()` to publish to the bus.
+- **`ChannelManager`** (`agent/integration/manager.py`): Discovers all channels via `register.py`, starts each in a daemon thread, dispatches outbound messages.
+- **`register.py`** (`agent/integration/register.py`): Registry mapping channel names to `BaseChannel` instances. To add a new channel, add it here.
+
 ### Progressive Skill Loading
 Skills are defined as subdirectories under `agent/skills/`, each containing a `SKILL.md` with YAML frontmatter (`name`, `description`) and a markdown body. The `SkillMiddleware` injects available skill summaries into the system prompt at runtime; agents call `load_skill(name)` to pull in full instructions on demand.
 
@@ -162,6 +194,8 @@ The agent uses a layered middleware pipeline (configured in `server.py`):
 | `TodoListMiddleware` | Manages task tracking and progress visibility |
 | `ToolRetryMiddleware` | Retries failed tool calls (max 3, exponential backoff) |
 | `ModelRetryMiddleware` | Retries failed model calls (max 3, exponential backoff) |
+| `SummarizationMiddleware` | Summarizes conversation when token count exceeds threshold (128k) |
+| `ContextEditingMiddleware` | Clears old tool uses when context exceeds token limit (500k), keeps last 5 |
 
 ### MCP Tool Integration
 MCP (Model Context Protocol) tools are loaded at startup via `agent/utils/mcp_util.py`, which reads `mcp.json` from the project root. MCP tools are merged with built-in tools and passed to the agent. To add MCP servers, edit `mcp.json`.
@@ -172,9 +206,13 @@ All tools live in `agent/tools/` as individual modules, exported via `agent/tool
 ### Prompt Construction
 The system prompt is assembled in `agent/prompt.py` from modular sections (role, working environment, project setup, editing constraints, tool usage, git hygiene). Modifications should be made in the corresponding section constant, not hardcoded elsewhere.
 
+### Logging
+All logging uses **loguru** via `agent/utils/logger.py`. Use `get_logger(name)` to obtain a bound logger instance. Log level is configurable via the `LOG_LEVEL` environment variable (defaults to `INFO`).
+
 ### Memory & Checkpointing
 - **Default / Web API**: `InMemorySaver` (ephemeral, for testing/programmatic use).
 - **CLI**: `AsyncSqliteSaver` backed by `cai-coder-sqlite.db` for persistent conversation state across sessions.
+- **Feishu / Channel mode**: `InMemorySaver` via `get_agent()` in `AgentLoop`.
 
 ### Web API (`agent/webapp.py`)
 A FastAPI application providing an **OpenAI-compatible** chat completions API:
@@ -189,16 +227,16 @@ A FastAPI application providing an **OpenAI-compatible** chat completions API:
 - Streaming uses SSE (`text/event-stream`) with `ChatCompletionChunk` events.
 - CORS is enabled for all origins.
 
-### Feishu Bot (`agent/integration/feishu/`)
-A **Feishu (Lark) long-connection WebSocket bot** that receives messages, forwards them to the cai-coder agent, and replies with the agent's response:
+### Feishu Channel (`agent/integration/feishu/`)
+A **Feishu (Lark) long-connection WebSocket channel** implementing `BaseChannel`:
 
-- **`bot.py`**: Core bot logic — connects via `lark.ws.Client`, processes incoming messages through a blocking queue (max 100), and replies with markdown-formatted responses. Includes emoji reactions to indicate processing.
+- **`bot.py`** (`FeishuChannel`): Connects via `lark.ws.Client`, processes incoming messages through `BaseChannel._handle_message()`, and replies with markdown-formatted responses. Includes emoji reactions to indicate processing.
 - **`config.py`**: Reads `FEISHU_APP_ID` and `FEISHU_APP_SECRET` from environment variables.
 - **Session management**: Uses `chat_id` as session ID for per-group conversation isolation.
-- **Unified launch**: `agent/main.py` starts the Feishu bot in a daemon thread alongside the Web API server.
+- **Message deduplication**: Tracks `message_id` in `task_db` to handle WebSocket event replay.
 
 ### Config via env
-All runtime configuration (LLM credentials, model, working dir, Feishu credentials) is sourced from environment variables. Never hardcode secrets.
+All runtime configuration (LLM credentials, model, working dir, Feishu credentials, log level) is sourced from environment variables. Never hardcode secrets.
 
 ## Rules for Agents
 
@@ -208,6 +246,7 @@ All runtime configuration (LLM credentials, model, working dir, Feishu credentia
 - **Do** run `pytest` after making changes to `agent/` to verify nothing is broken.
 - **Do** follow the existing pattern when adding new tools (one module per tool, export from `__init__.py`, register in `server.py`).
 - **Do** follow the existing pattern when adding new skills (subdirectory under `agent/skills/` with a `SKILL.md` containing YAML frontmatter).
-- **Do** follow the existing pattern when adding new integrations (subdirectory under `agent/integration/`).
+- **Do** follow the existing pattern when adding new integrations (implement `BaseChannel`, register in `register.py`).
+- **Do** follow the existing pattern when adding new middleware (implement `AgentMiddleware`, add to the middleware list in `server.py`).
 - Code identifiers and error messages should be in **English**; user-facing explanations in **Chinese**.
 - Keep the project compatible with Python 3.11+ (no version-exclusive syntax beyond 3.11).
