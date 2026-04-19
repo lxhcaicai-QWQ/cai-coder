@@ -24,6 +24,10 @@ class ChannelManager:
         log.info("start channel {}", name)
         channel.start()
 
+    def start_one(self, name: str):
+        threading.Thread(target=self._dispatch_outbound, daemon=True).start()
+        channel = self.channels.get(name)
+        threading.Thread(target=self._start_channel, args=(name, channel), daemon=True).start()
 
     def start_all(self):
         threading.Thread(target=self._dispatch_outbound, daemon=True).start()

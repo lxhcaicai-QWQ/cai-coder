@@ -119,6 +119,7 @@ class AgentLoop:
         self.bus = bus
 
         self.agent = get_agent()
+        self._thread = threading.Thread(target=self.run, daemon=True)
 
 
     def run(self):
@@ -142,5 +143,4 @@ class AgentLoop:
 
 
     def start(self):
-        thread = threading.Thread(target=self.run, daemon=True)
-        thread.start()
+        self._thread.start()
