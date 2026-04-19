@@ -44,9 +44,6 @@ class FeishuChannel(BaseChannel):
         # 验证配置
         FeishuBotConfig.validate()
 
-        # 初始化 cai-coder 客户端
-        self.cai_coder = CaiCoderClient()
-
         self.task_db = set()
 
         # 会话过期时间
