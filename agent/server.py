@@ -92,12 +92,12 @@ def get_agent(checkpointer: Checkpointer = InMemorySaver(), mcptools: list[BaseT
                 trigger= [
                     ("tokens",128000)
                 ],
-                keep=("tokens", 500000)
+                keep=("tokens", 80000)
             ),
             ContextEditingMiddleware(
                 edits=[
                     ClearToolUsesEdit(
-                        trigger=500000,
+                        trigger=64000,
                         keep=5,
                         clear_tool_inputs=False,
                         exclude_tools=[],
