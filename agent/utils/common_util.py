@@ -48,3 +48,9 @@ def resolve_path(path: str) -> str:
         )
 
     return str(resolved)
+
+
+def ensure_dir(path: Path) -> Path:
+    """Ensure directory exists, return it."""
+    path.mkdir(parents=True, exist_ok=True)
+    return path
