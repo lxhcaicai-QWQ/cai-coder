@@ -12,6 +12,7 @@ from langgraph.types import Checkpointer
 from .bus.bus import MessageBus
 from .bus.events import OutMessage
 from .middleware import SkillMiddleware
+from .session import SessionManager
 from .tools import (
     get_weather,
     read_file,
@@ -115,9 +116,9 @@ def get_agent(checkpointer: Checkpointer = InMemorySaver(), mcptools: list[BaseT
 
 class AgentLoop:
 
-    def __init__(self,bus: MessageBus):
+    def __init__(self,bus: MessageBus, session_manager: SessionManager=None):
         self.bus = bus
-
+        self.session_manager = session_manager
         self.agent = get_agent()
         self._thread = threading.Thread(target=self.run, daemon=True)
 
@@ -129,12 +130,16 @@ class AgentLoop:
                 continue
             content = msg.content
             chat_id = msg.chat_id
+            channel = msg.channel
+
+            if self.session_manager:
+                self.session_manager.get_or_create(f"{channel}:{chat_id}")
 
             config = {"configurable": {"thread_id": chat_id}}
             response = self.agent.invoke({"messages": [{"role": "user", "content": content}]}, config=config)
 
             out_message = OutMessage(
-                channel=msg.channel,
+                channel=channel,
                 chat_id=chat_id,
                 content=response["messages"][-1].content,
                 metadata=msg.metadata
