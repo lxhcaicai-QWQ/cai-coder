@@ -38,7 +38,6 @@ cai-coder/
 │   │   └── write_file.py
 │   ├── skills/              # Skill definitions (each subdir has SKILL.md)
 │   │   ├── agents-md-generator/
-│   │   ├── green-tea-skill/
 │   │   ├── python-patterns/
 │   │   └── python-testing/
 │   ├── integration/         # External platform integrations (channel abstraction)

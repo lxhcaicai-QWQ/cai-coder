@@ -30,7 +30,9 @@
 - **MCP Tool Integration** — Connect external MCP servers to extend agent capabilities via `mcp.json`.
 - **OpenAI-Compatible Web API** — FastAPI-powered HTTP API with streaming (SSE) and non-streaming modes, compatible with the OpenAI `/v1/chat/completions` interface.
 - **Feishu (Lark) Bot** — Long-connection WebSocket bot for Feishu, enabling chat-based AI coding assistance directly in Feishu groups.
-- **Middleware Architecture** — Extensible middleware pipeline: skill loading, task tracking, tool/model retry with exponential backoff.
+- **Message Bus Architecture** — Centralized `MessageBus` decouples channels from the agent, enabling easy addition of new chat platforms.
+- **Channel Abstraction** — `BaseChannel` interface for pluggable platform integrations (Feishu, Slack, Discord, etc.).
+- **Middleware Architecture** — Extensible middleware pipeline: skill loading, task tracking, tool/model retry with exponential backoff, context summarization and editing.
 - **Persistent Conversation Memory** — Stateful conversations powered by LangGraph's `AsyncSqliteSaver` with SQLite persistence (CLI mode).
 - **CLI & API & Bot Triple Interface** — Interactive async REPL for real-time coding assistance, HTTP API for programmatic integration, and Feishu bot for team collaboration.
 - **Docker Support** — Containerized deployment out of the box, including Docker Compose.
@@ -74,6 +76,8 @@ User Input → Agent (Base State)
 | `TodoListMiddleware` | Manages task tracking and progress visibility |
 | `ToolRetryMiddleware` | Retries failed tool calls (max 3, exponential backoff) |
 | `ModelRetryMiddleware` | Retries failed model calls (max 3, exponential backoff) |
+| `SummarizationMiddleware` | Summarizes conversation when token count exceeds threshold (128k) |
+| `ContextEditingMiddleware` | Clears old tool uses when context exceeds token limit (500k), keeps last 5 |
 
 ## Quick Start
 
@@ -124,7 +128,7 @@ FEISHU_APP_SECRET=your-app-secret
 python agent/main.py
 ```
 
-This starts both the **FastAPI Web API server** (port 8000) and the **Feishu WebSocket bot** in a daemon thread.
+This starts the **MessageBus**, **ChannelManager** (discovers and starts all registered channels, e.g. Feishu), **AgentLoop** (consumes inbound messages, invokes agent, publishes outbound), and the **FastAPI Web API server** (port 8000). All channels run in daemon threads.
 
 ### 4. Run the CLI Agent
 
@@ -186,12 +190,12 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 
 ## Feishu Bot
 
-cai-coder includes a **Feishu (Lark) long-connection WebSocket bot** that allows users to interact with the AI agent directly in Feishu group chats.
+cai-coder includes a **Feishu (Lark) long-connection WebSocket channel** implementing the `BaseChannel` interface, allowing users to interact with the AI agent directly in Feishu group chats.
 
 ### Features
 
 - Receives messages via Feishu WebSocket long connection
-- Forwards messages to the cai-coder agent and replies with markdown-formatted responses
+- Forwards messages to the cai-coder agent through the MessageBus and replies with markdown-formatted responses
 - Per-group session isolation using `chat_id` as session ID
 - Emoji reactions to indicate message processing status
 - Message deduplication to handle WebSocket event replay
@@ -201,15 +205,15 @@ cai-coder includes a **Feishu (Lark) long-connection WebSocket bot** that allows
 1. Create a Feishu app in the [Feishu Open Platform](https://open.feishu.cn/)
 2. Enable the bot capability and configure message event subscriptions
 3. Set `FEISHU_APP_ID` and `FEISHU_APP_SECRET` in `.local.env`
-4. Start via `python agent/main.py` (starts both Web API and Feishu bot)
+4. Start via `python agent/main.py` (starts MessageBus + all channels + Web API)
 
 ### Architecture
 
 ```
-Feishu Message → WebSocket Client → Blocking Queue → CaiCoderClient → Agent → Reply
+Feishu Message → FeishuChannel → MessageBus.inbound → AgentLoop → Agent → MessageBus.outbound → ChannelManager → FeishuChannel.send()
 ```
 
-- **`bot.py`**: Core bot logic — connects via `lark.ws.Client`, processes messages through a blocking queue (max 100), and replies with markdown.
+- **`bot.py`** (`FeishuChannel`): Connects via `lark.ws.Client`, processes messages through `BaseChannel._handle_message()`, and replies with markdown.
 - **`config.py`**: Reads Feishu credentials from environment variables.
 
 ## MCP Integration
@@ -265,11 +269,14 @@ pytest tests/test_agent.py
 ```
 cai-coder/
 ├── agent/                        # Core agent package
-│   ├── main.py                   # Unified entry: Web API + Feishu bot (threaded)
+│   ├── main.py                   # Unified entry: MessageBus + ChannelManager + AgentLoop + Web API
 │   ├── cli.py                    # CLI entry point (interactive async REPL)
-│   ├── server.py                 # Agent factory (LLM, tools, middleware, memory)
+│   ├── server.py                 # Agent factory (LLM, tools, middleware, memory) + AgentLoop
 │   ├── prompt.py                 # System prompt construction (modular sections)
 │   ├── webapp.py                 # OpenAI-compatible Web API (FastAPI + SSE streaming)
+│   ├── bus/                      # Message bus for channel-agent communication
+│   │   ├── bus.py                #   MessageBus (inbound/outbound queues)
+│   │   └── events.py             #   InMessage / OutMessage dataclasses
 │   ├── middleware/                # Agent middleware
 │   │   ├── __init__.py           #   Middleware exports
 │   │   └── skill_middleware.py   #   SkillMiddleware — progressive skill loading
@@ -285,12 +292,16 @@ cai-coder/
 │   │   ├── agents-md-generator/  #   AGENTS.md generation skill
 │   │   ├── python-patterns/      #   Python best practices skill
 │   │   └── python-testing/       #   Python testing skill
-│   ├── integration/              # External platform integrations
-│   │   └── feishu/               #   Feishu (Lark) bot
-│   │       ├── bot.py            #     WebSocket bot: message handling, queue, reply
+│   ├── integration/              # External platform integrations (channel abstraction)
+│   │   ├── base.py               #   BaseChannel ABC (send, start, _handle_message)
+│   │   ├── manager.py            #   ChannelManager (discovers, starts, dispatches)
+│   │   ├── register.py           #   Channel registry (discovers all channels)
+│   │   └── feishu/               #   Feishu (Lark) channel
+│   │       ├── bot.py            #     FeishuChannel(BaseChannel): WS bot, reactions, reply
 │   │       └── config.py         #     Feishu app credentials & session config
 │   └── utils/                    # Utility functions
 │       ├── common_util.py        #   Project root finder
+│       ├── logger.py             #   loguru setup & get_logger helper
 │       ├── mcp_util.py           #   MCP tool loader (reads mcp.json)
 │       └── skill.py              #   Skill discovery, parsing, rendering
 ├── app/                          # Application layer (demos)
@@ -300,7 +311,9 @@ cai-coder/
 │   ├── skills/                   #   Skill-specific tests
 │   ├── test_agent.py
 │   ├── test_agent_generate_code.py
+│   ├── test_agent_loop.py
 │   ├── test_agent_mcp.py
+│   ├── test_feishu_channel.py
 │   ├── test_http_request.py
 │   ├── test_skills_loader.py
 │   ├── test_tools.py
@@ -317,12 +330,27 @@ cai-coder/
 
 ## Architecture
 
+### Message Bus & Channel Abstraction
+
+The unified entry (`agent/main.py`) uses a centralized `MessageBus` to decouple channels from the agent:
+
+```
+Channel (feishu, ...) ──publish_inbound──> MessageBus.inbound ──consume──> AgentLoop ──invoke──> Agent
+AgentLoop ──publish_outbound──> MessageBus.outbound ──consume──> ChannelManager ──dispatch──> Channel.send()
+```
+
+- **`MessageBus`** (`agent/bus/bus.py`): Two `queue.Queue` instances — `inbound` and `outbound`.
+- **`BaseChannel`** (`agent/integration/base.py`): Abstract base with `send(msg)` and `start()` methods. All platform integrations implement this interface.
+- **`ChannelManager`** (`agent/integration/manager.py`): Discovers all channels, starts each in a daemon thread, dispatches outbound messages.
+- **`AgentLoop`** (`agent/server.py`): Runs in a daemon thread; consumes from `inbound`, invokes the agent, publishes to `outbound`.
+
 ### Memory & Checkpointing
 
 | Mode | Checkpointer | Persistence |
 |---|---|---|
 | **CLI** | `AsyncSqliteSaver` (`cai-coder-sqlite.db`) | Persistent across sessions |
-| **Web API / Feishu Bot** | `InMemorySaver` | Ephemeral (lost on restart) |
+| **Web API** | `InMemorySaver` | Ephemeral (lost on restart) |
+| **Feishu / Channel mode** | `InMemorySaver` via `get_agent()` in `AgentLoop` | Ephemeral (lost on restart) |
 
 ### Web API
 
@@ -335,7 +363,7 @@ A FastAPI application providing an **OpenAI-compatible** chat completions API:
 
 ### Config via Env
 
-All runtime configuration (LLM credentials, model, working dir, Feishu credentials) is sourced from environment variables. Never hardcode secrets.
+All runtime configuration (LLM credentials, model, working dir, Feishu credentials, log level) is sourced from environment variables. Never hardcode secrets.
 
 | Variable | Description |
 |---|---|
@@ -345,6 +373,7 @@ All runtime configuration (LLM credentials, model, working dir, Feishu credentia
 | `FEISHU_APP_ID` | Feishu (Lark) application ID |
 | `FEISHU_APP_SECRET` | Feishu (Lark) application secret |
 | `WORKING_DIR` | (Optional) Override the working directory for the agent |
+| `LOG_LEVEL` | (Optional) Log level for loguru (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 
 ## Extending
 
@@ -373,11 +402,16 @@ Detailed instructions for the agent...
 
 3. The `SkillMiddleware` will automatically discover and include it.
 
-### Add a New Integration
+### Add a New Channel Integration
 
 1. Create a new directory under `agent/integration/` (e.g., `my-platform/`)
-2. Implement the bot/client logic following the existing pattern (see `agent/integration/feishu/`)
-3. Register the startup logic in `agent/main.py`
+2. Implement a class extending `BaseChannel` with `send()` and `start()` methods
+3. Register it in `agent/integration/register.py`
+
+### Add a New Middleware
+
+1. Implement `AgentMiddleware` from LangChain
+2. Add it to the middleware list in `agent/server.py`
 
 ### Add an MCP Server
 
