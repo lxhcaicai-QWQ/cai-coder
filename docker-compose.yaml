@@ -4,5 +4,7 @@ services:
     container_name: cai-coder
     ports:
       - "8000:8000"
+    environment:
+      - TZ=Asia/Shanghai
     env_file:
       - .local.env

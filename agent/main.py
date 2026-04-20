@@ -64,7 +64,6 @@ def gateway():
 
     heartbeat = HeartbeatService(
         workspace=Path(working_dir),
-        interval_seconds=60,
         on_execute=on_heartbeat_execute,
         on_notify=on_heartbeat_notify
     )
