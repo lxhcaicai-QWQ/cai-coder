@@ -9,7 +9,7 @@ from agent.heartbeat.heatbeat import HeartbeatService
 from agent.integration.manager import ChannelManager
 from agent.server import AgentLoop, get_agent
 from agent.session import SessionManager
-from agent.utils.common_util import get_working_dir
+from agent.utils.common_util import get_working_dir, init_workspace_templates
 from agent.utils.logger import get_logger
 
 logger = get_logger("main")
@@ -19,6 +19,7 @@ direct_agent = get_agent(checkpointer=checkpoint)
 
 def gateway():
 
+    init_workspace_templates(Path(working_dir))
     session_manager = SessionManager(Path(working_dir))
 
     bus = MessageBus()
