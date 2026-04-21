@@ -21,7 +21,7 @@
 
 ## What is cai-coder?
 
-**cai-coder** is an AI-powered coding agent built with **Python**, **LangChain**, and **LangGraph**. It features a unique **progressive skill-loading** mechanism that keeps the agent lightweight by default, only loading specialized capabilities when needed. It also supports **MCP (Model Context Protocol)** tool integration for seamless extension, provides an **OpenAI-compatible Web API** via FastAPI, and includes a **Feishu (Lark) bot integration** for chat-based interaction.
+**cai-coder** is an AI-powered coding agent built with **Python**, **LangChain**, and **LangGraph**. It features a unique **progressive skill-loading** mechanism that keeps the agent lightweight by default, only loading specialized capabilities when needed. It also supports **MCP (Model Context Protocol)** tool integration for seamless extension, provides an **OpenAI-compatible Web API** via FastAPI, includes a **Feishu (Lark) bot integration** for chat-based interaction, a **heartbeat service** for periodic task execution, and a **session manager** for tracking conversations across channels.
 
 ## Key Features
 
@@ -30,10 +30,13 @@
 - **MCP Tool Integration** — Connect external MCP servers to extend agent capabilities via `mcp.json`.
 - **OpenAI-Compatible Web API** — FastAPI-powered HTTP API with streaming (SSE) and non-streaming modes, compatible with the OpenAI `/v1/chat/completions` interface.
 - **Feishu (Lark) Bot** — Long-connection WebSocket bot for Feishu, enabling chat-based AI coding assistance directly in Feishu groups.
+- **Heartbeat Service** — Periodic task execution that reads `HEARTBEAT.md`, uses an LLM to decide whether to act, and notifies active sessions.
+- **Session Manager** — Tracks conversations across channels, persisted to `sessions/sessions.json` for session-aware operations.
 - **Message Bus Architecture** — Centralized `MessageBus` decouples channels from the agent, enabling easy addition of new chat platforms.
 - **Channel Abstraction** — `BaseChannel` interface for pluggable platform integrations (Feishu, Slack, Discord, etc.).
 - **Middleware Architecture** — Extensible middleware pipeline: skill loading, task tracking, tool/model retry with exponential backoff, context summarization and editing.
 - **Persistent Conversation Memory** — Stateful conversations powered by LangGraph's `AsyncSqliteSaver` with SQLite persistence (CLI mode).
+- **Workspace Templates** — Auto-initialized template files (e.g. `HEARTBEAT.md`) copied to the workspace on startup.
 - **CLI & API & Bot Triple Interface** — Interactive async REPL for real-time coding assistance, HTTP API for programmatic integration, and Feishu bot for team collaboration.
 - **Docker Support** — Containerized deployment out of the box, including Docker Compose.
 
@@ -76,8 +79,8 @@ User Input → Agent (Base State)
 | `TodoListMiddleware` | Manages task tracking and progress visibility |
 | `ToolRetryMiddleware` | Retries failed tool calls (max 3, exponential backoff) |
 | `ModelRetryMiddleware` | Retries failed model calls (max 3, exponential backoff) |
-| `SummarizationMiddleware` | Summarizes conversation when token count exceeds threshold (128k) |
-| `ContextEditingMiddleware` | Clears old tool uses when context exceeds token limit (500k), keeps last 5 |
+| `SummarizationMiddleware` | Summarizes conversation when token count exceeds 128k, keeps last 80k tokens |
+| `ContextEditingMiddleware` | Clears old tool uses when context exceeds 64k tokens, keeps last 5 |
 
 ## Quick Start
 
@@ -118,17 +121,21 @@ OPENAI_MODEL=gpt-4
 # Feishu bot (optional, required for Feishu integration)
 FEISHU_APP_ID=your-app-id
 FEISHU_APP_SECRET=your-app-secret
+
+# Optional
+WORKING_DIR=/path/to/workspace
+LOG_LEVEL=INFO
 ```
 
 > `.local.env` is git-ignored and should **never** be committed.
 
-### 3. Run the Unified Entry (Web API + Feishu Bot)
+### 3. Run the Unified Entry (Web API + Feishu Bot + Heartbeat)
 
 ```bash
 python agent/main.py
 ```
 
-This starts the **MessageBus**, **ChannelManager** (discovers and starts all registered channels, e.g. Feishu), **AgentLoop** (consumes inbound messages, invokes agent, publishes outbound), and the **FastAPI Web API server** (port 8000). All channels run in daemon threads.
+This starts: **init_workspace_templates** (copies template files to `WORKING_DIR`), **SessionManager**, **MessageBus**, **ChannelManager** (discovers and starts all registered channels, e.g. Feishu), **HeartbeatService** (periodic task execution), **AgentLoop** (consumes inbound messages, invokes agent, publishes outbound), and the **FastAPI Web API server** (port 8000). All services run in daemon threads.
 
 ### 4. Run the CLI Agent
 
@@ -188,6 +195,32 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 
 > The Web API uses `InMemorySaver` (ephemeral — no persistent state across restarts). CORS is enabled for all origins.
 
+## Heartbeat Service
+
+cai-coder includes a **heartbeat service** that periodically reads `HEARTBEAT.md` from the workspace and executes tasks when actionable items are found.
+
+### How It Works
+
+1. `HeartbeatService` runs in a daemon thread, checking `HEARTBEAT.md` every **30 minutes** by default.
+2. An LLM reads the file and decides: `run` (has active tasks) or `skip` (nothing to do).
+3. If `run`, the tasks are sent to the agent for execution.
+4. Results are pushed to the most recently active channel session (e.g. Feishu group).
+
+### Usage
+
+Add periodic tasks to `HEARTBEAT.md` in the project root (auto-created from template on first startup):
+
+```markdown
+# Heartbeat Tasks
+
+## Active Tasks
+
+- Check if the CI pipeline is green and report failures
+- Review open PRs and summarize status
+```
+
+> **Important**: Delete completed tasks from `HEARTBEAT.md` to keep the file short and minimize token usage.
+
 ## Feishu Bot
 
 cai-coder includes a **Feishu (Lark) long-connection WebSocket channel** implementing the `BaseChannel` interface, allowing users to interact with the AI agent directly in Feishu group chats.
@@ -205,7 +238,7 @@ cai-coder includes a **Feishu (Lark) long-connection WebSocket channel** impleme
 1. Create a Feishu app in the [Feishu Open Platform](https://open.feishu.cn/)
 2. Enable the bot capability and configure message event subscriptions
 3. Set `FEISHU_APP_ID` and `FEISHU_APP_SECRET` in `.local.env`
-4. Start via `python agent/main.py` (starts MessageBus + all channels + Web API)
+4. Start via `python agent/main.py` (starts MessageBus + all channels + Heartbeat + Web API)
 
 ### Architecture
 
@@ -269,7 +302,7 @@ pytest tests/test_agent.py
 ```
 cai-coder/
 ├── agent/                        # Core agent package
-│   ├── main.py                   # Unified entry: MessageBus + ChannelManager + AgentLoop + Web API
+│   ├── main.py                   # Unified entry: MessageBus + ChannelManager + AgentLoop + HeartbeatService + Web API
 │   ├── cli.py                    # CLI entry point (interactive async REPL)
 │   ├── server.py                 # Agent factory (LLM, tools, middleware, memory) + AgentLoop
 │   ├── prompt.py                 # System prompt construction (modular sections)
@@ -292,6 +325,14 @@ cai-coder/
 │   │   ├── agents-md-generator/  #   AGENTS.md generation skill
 │   │   ├── python-patterns/      #   Python best practices skill
 │   │   └── python-testing/       #   Python testing skill
+│   ├── heartbeat/                # Heartbeat service for periodic task execution
+│   │   ├── __init__.py
+│   │   └── heatbeat.py           #   HeartbeatService — reads HEARTBEAT.md, decides via LLM, executes tasks
+│   ├── session/                  # Session management for multi-channel conversations
+│   │   ├── __init__.py           #   Exports Session, SessionManager
+│   │   └── manager.py            #   SessionManager — CRUD for sessions persisted to sessions.json
+│   ├── templates/                # Workspace template files (copied to WORKING_DIR on startup)
+│   │   └── HEARTBEAT.md          #   Default heartbeat task template
 │   ├── integration/              # External platform integrations (channel abstraction)
 │   │   ├── base.py               #   BaseChannel ABC (send, start, _handle_message)
 │   │   ├── manager.py            #   ChannelManager (discovers, starts, dispatches)
@@ -300,7 +341,7 @@ cai-coder/
 │   │       ├── bot.py            #     FeishuChannel(BaseChannel): WS bot, reactions, reply
 │   │       └── config.py         #     Feishu app credentials & session config
 │   └── utils/                    # Utility functions
-│       ├── common_util.py        #   Project root finder
+│       ├── common_util.py        #   Project root finder, path resolver, workspace init
 │       ├── logger.py             #   loguru setup & get_logger helper
 │       ├── mcp_util.py           #   MCP tool loader (reads mcp.json)
 │       └── skill.py              #   Skill discovery, parsing, rendering
@@ -308,17 +349,23 @@ cai-coder/
 │   └── snake-game/
 ├── tests/                        # Test suite
 │   ├── file/                     #   File-related test fixtures
+│   ├── sessions/                 #   Session test data
 │   ├── skills/                   #   Skill-specific tests
 │   ├── test_agent.py
 │   ├── test_agent_generate_code.py
 │   ├── test_agent_loop.py
 │   ├── test_agent_mcp.py
 │   ├── test_feishu_channel.py
+│   ├── test_heartbeat.py
 │   ├── test_http_request.py
+│   ├── test_session_manager.py
 │   ├── test_skills_loader.py
 │   ├── test_tools.py
 │   ├── test_utils_config.py
 │   └── test_web_api.py           #   Web API endpoint tests
+├── sessions/                     # Runtime session data (git-ignored)
+│   └── sessions.json             #   Persisted session state
+├── HEARTBEAT.md                  # Heartbeat task definitions (auto-created from template)
 ├── mcp.json                      # MCP server configuration
 ├── pyproject.toml                # Project metadata & dependencies
 ├── Dockerfile                    # Docker image definition
@@ -342,7 +389,22 @@ AgentLoop ──publish_outbound──> MessageBus.outbound ──consume──>
 - **`MessageBus`** (`agent/bus/bus.py`): Two `queue.Queue` instances — `inbound` and `outbound`.
 - **`BaseChannel`** (`agent/integration/base.py`): Abstract base with `send(msg)` and `start()` methods. All platform integrations implement this interface.
 - **`ChannelManager`** (`agent/integration/manager.py`): Discovers all channels, starts each in a daemon thread, dispatches outbound messages.
-- **`AgentLoop`** (`agent/server.py`): Runs in a daemon thread; consumes from `inbound`, invokes the agent, publishes to `outbound`.
+- **`AgentLoop`** (`agent/server.py`): Runs in a daemon thread; consumes from `inbound`, invokes the agent, publishes to `outbound`. Accepts an optional `SessionManager` to track sessions per message.
+
+### Heartbeat Service
+
+A periodic task execution service that reads `HEARTBEAT.md` from the workspace:
+
+- **`HeartbeatService`** (`agent/heartbeat/heatbeat.py`): Runs in a daemon thread, checks `HEARTBEAT.md` every 30 minutes by default.
+- **Decision flow**: Reads `HEARTBEAT.md` → LLM decides `run` or `skip` → If `run`, executes tasks via the agent → Notifies the most recently active channel session.
+- **`HeartBeatResult`**: Pydantic model with `action` (run/skip) and `tasks` (natural language summary).
+
+### Session Manager
+
+Tracks conversations across channels for session-aware operations:
+
+- **`SessionManager`** (`agent/session/manager.py`): Manages `Session` objects keyed by `{channel}:{chat_id}`. Persists to `sessions/sessions.json`.
+- Used by `AgentLoop` to register each inbound message's session, and by `HeartbeatService` to find the most recently active session for notifications.
 
 ### Memory & Checkpointing
 

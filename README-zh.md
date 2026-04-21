@@ -21,7 +21,7 @@
 
 ## 项目简介
 
-**cai-coder** 是一个基于 **Python**、**LangChain** 和 **LangGraph** 构建的 AI 编程助手 Agent。它采用独特的 **渐进式技能加载** 机制——Agent 默认保持轻量的基础状态，只有在用户触发特定需求时才动态加载专业技能，兼顾了效率与灵活性。同时支持 **MCP (Model Context Protocol)** 工具集成，可无缝扩展 Agent 能力，通过 FastAPI 提供 **OpenAI 兼容的 Web API** 接口，并集成了 **飞书机器人** 支持在群聊中直接使用 AI 编程助手。
+**cai-coder** 是一个基于 **Python**、**LangChain** 和 **LangGraph** 构建的 AI 编程助手 Agent。它采用独特的 **渐进式技能加载** 机制——Agent 默认保持轻量的基础状态，只有在用户触发特定需求时才动态加载专业技能，兼顾了效率与灵活性。同时支持 **MCP (Model Context Protocol)** 工具集成，可无缝扩展 Agent 能力，通过 FastAPI 提供 **OpenAI 兼容的 Web API** 接口，集成了 **飞书机器人** 支持在群聊中直接使用 AI 编程助手，并提供了 **心跳服务** 用于周期性任务执行和 **会话管理器** 用于跨通道的会话追踪。
 
 ## 核心特性
 
@@ -30,10 +30,13 @@
 - **MCP 工具集成** — 通过 `mcp.json` 配置外部 MCP 服务器，扩展 Agent 能力。
 - **OpenAI 兼容 Web API** — 基于 FastAPI 的 HTTP 接口，支持流式（SSE）和非流式模式，完全兼容 OpenAI `/v1/chat/completions` 接口规范。
 - **飞书机器人** — 基于飞书长连接 WebSocket 的机器人，支持在飞书群聊中直接使用 AI 编程助手。
+- **心跳服务** — 周期性读取 `HEARTBEAT.md`，由 LLM 决策是否执行任务，并通知活跃会话。
+- **会话管理器** — 跨通道跟踪对话，持久化到 `sessions/sessions.json`，支持会话感知操作。
 - **消息总线架构** — 中央 `MessageBus` 解耦了通道与 Agent，便于快速接入新的聊天平台。
 - **通道抽象层** — `BaseChannel` 接口支持可插拔的平台集成（飞书、Slack、Discord 等）。
 - **中间件架构** — 可扩展的中间件流水线：技能加载、任务追踪、工具/模型调用自动重试（指数退避）、上下文摘要与编辑。
 - **持久化对话记忆** — 基于 LangGraph 的 `AsyncSqliteSaver` + SQLite 持久化，支持跨会话有状态对话。
+- **工作区模板** — 启动时自动初始化模板文件（如 `HEARTBEAT.md`）到工作目录。
 - **CLI & API & 机器人三接口** — 提供异步交互式 REPL、HTTP API 和飞书机器人三种使用方式。
 - **Docker 支持** — 开箱即用的容器化部署方案，包含 Docker Compose 配置。
 
@@ -76,8 +79,8 @@
 | `TodoListMiddleware` | 管理任务追踪与进度可视化 |
 | `ToolRetryMiddleware` | 工具调用失败自动重试（最多 3 次，指数退避） |
 | `ModelRetryMiddleware` | 模型调用失败自动重试（最多 3 次，指数退避） |
-| `SummarizationMiddleware` | 对话 token 数超过阈值（128k）时自动摘要 |
-| `ContextEditingMiddleware` | 上下文超过 token 限制（500k）时清理旧工具调用，保留最近 5 条 |
+| `SummarizationMiddleware` | 对话 token 数超过 128k 时自动摘要，保留最近 80k tokens |
+| `ContextEditingMiddleware` | 上下文超过 64k tokens 时清理旧工具调用，保留最近 5 条 |
 
 ## 快速开始
 
@@ -118,17 +121,21 @@ OPENAI_MODEL=gpt-4
 # 飞书机器人（可选，使用飞书集成时必填）
 FEISHU_APP_ID=your-app-id
 FEISHU_APP_SECRET=your-app-secret
+
+# 可选
+WORKING_DIR=/path/to/workspace
+LOG_LEVEL=INFO
 ```
 
 > `.local.env` 已被 Git 忽略，**切勿**将其提交到代码仓库。
 
-### 3. 运行统一入口（Web API + 飞书机器人）
+### 3. 运行统一入口（Web API + 飞书机器人 + 心跳服务）
 
 ```bash
 python agent/main.py
 ```
 
-此命令会启动 **MessageBus**、**ChannelManager**（发现并启动所有已注册的通道，如飞书）、**AgentLoop**（消费入站消息、调用 Agent、发布出站消息）以及 **FastAPI Web API 服务**（端口 8000）。所有通道以守护线程方式运行。
+此命令会启动：**init_workspace_templates**（将模板文件复制到 `WORKING_DIR`）、**SessionManager**、**MessageBus**、**ChannelManager**（发现并启动所有已注册的通道，如飞书）、**HeartbeatService**（周期性任务执行）、**AgentLoop**（消费入站消息、调用 Agent、发布出站消息）以及 **FastAPI Web API 服务**（端口 8000）。所有服务以守护线程方式运行。
 
 ### 4. 运行 CLI Agent
 
@@ -188,6 +195,32 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 
 > Web API 使用 `InMemorySaver`（内存存储，重启后状态不保留）。已启用 CORS，允许所有来源访问。
 
+## 心跳服务
+
+cai-coder 内置了**心跳服务**，会周期性读取工作区的 `HEARTBEAT.md` 文件，当发现可执行任务时自动触发。
+
+### 工作原理
+
+1. `HeartbeatService` 在守护线程中运行，默认每 **30 分钟** 检查一次 `HEARTBEAT.md`。
+2. 由 LLM 读取文件并决策：`run`（有活跃任务）或 `skip`（无需操作）。
+3. 如果决策为 `run`，任务会被发送给 Agent 执行。
+4. 执行结果会推送到最近活跃的通道会话（如飞书群聊）。
+
+### 使用方法
+
+在项目根目录的 `HEARTBEAT.md` 中添加周期性任务（首次启动时自动从模板创建）：
+
+```markdown
+# Heartbeat Tasks
+
+## Active Tasks
+
+- 检查 CI 流水线是否通过，报告失败信息
+- 审查开放的 PR 并汇总状态
+```
+
+> **注意**：任务完成后请立即从 `HEARTBEAT.md` 中删除，以保持文件精简并减少 token 消耗。
+
 ## 飞书机器人
 
 cai-coder 内置了**飞书（Lark）长连接 WebSocket 通道**，实现了 `BaseChannel` 接口，用户可以在飞书群聊中直接与 AI Agent 交互。
@@ -205,7 +238,7 @@ cai-coder 内置了**飞书（Lark）长连接 WebSocket 通道**，实现了 `B
 1. 在 [飞书开放平台](https://open.feishu.cn/) 创建应用
 2. 启用机器人能力并配置消息事件订阅
 3. 在 `.local.env` 中设置 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET`
-4. 通过 `python agent/main.py` 启动（启动 MessageBus + 所有通道 + Web API）
+4. 通过 `python agent/main.py` 启动（启动 MessageBus + 所有通道 + 心跳服务 + Web API）
 
 ### 架构
 
@@ -269,7 +302,7 @@ pytest tests/test_agent.py
 ```
 cai-coder/
 ├── agent/                        # 核心 Agent 包
-│   ├── main.py                   # 统一入口：MessageBus + ChannelManager + AgentLoop + Web API
+│   ├── main.py                   # 统一入口：MessageBus + ChannelManager + AgentLoop + HeartbeatService + Web API
 │   ├── cli.py                    # CLI 入口（异步交互式 REPL）
 │   ├── server.py                 # Agent 工厂（LLM、工具、中间件、记忆）+ AgentLoop
 │   ├── prompt.py                 # 系统提示词构建（模块化）
@@ -292,6 +325,14 @@ cai-coder/
 │   │   ├── agents-md-generator/  #   AGENTS.md 生成技能
 │   │   ├── python-patterns/      #   Python 最佳实践技能
 │   │   └── python-testing/       #   Python 测试技能
+│   ├── heartbeat/                # 心跳服务（周期性任务执行）
+│   │   ├── __init__.py
+│   │   └── heatbeat.py           #   HeartbeatService — 读取 HEARTBEAT.md，LLM 决策，执行任务
+│   ├── session/                  # 会话管理（跨通道会话追踪）
+│   │   ├── __init__.py           #   导出 Session、SessionManager
+│   │   └── manager.py            #   SessionManager — 会话 CRUD，持久化到 sessions.json
+│   ├── templates/                # 工作区模板文件（启动时复制到 WORKING_DIR）
+│   │   └── HEARTBEAT.md          #   默认心跳任务模板
 │   ├── integration/              # 外部平台集成（通道抽象）
 │   │   ├── base.py               #   BaseChannel 抽象基类
 │   │   ├── manager.py            #   ChannelManager（发现、启动、分发）
@@ -300,7 +341,7 @@ cai-coder/
 │   │       ├── bot.py            #     FeishuChannel(BaseChannel)：WS 机器人、表情、回复
 │   │       └── config.py         #     飞书应用凭证与会话配置
 │   └── utils/                    # 工具函数
-│       ├── common_util.py        #   项目根目录查找器
+│       ├── common_util.py        #   项目根目录查找、路径解析、工作区初始化
 │       ├── logger.py             #   loguru 日志配置与 get_logger 工具
 │       ├── mcp_util.py           #   MCP 工具加载器（读取 mcp.json）
 │       └── skill.py              #   技能发现、解析、渲染
@@ -308,17 +349,23 @@ cai-coder/
 │   └── snake-game/
 ├── tests/                        # 测试套件
 │   ├── file/                     #   文件相关测试数据
+│   ├── sessions/                 #   会话测试数据
 │   ├── skills/                   #   技能相关测试
 │   ├── test_agent.py
 │   ├── test_agent_generate_code.py
 │   ├── test_agent_loop.py
 │   ├── test_agent_mcp.py
 │   ├── test_feishu_channel.py
+│   ├── test_heartbeat.py
 │   ├── test_http_request.py
+│   ├── test_session_manager.py
 │   ├── test_skills_loader.py
 │   ├── test_tools.py
 │   ├── test_utils_config.py
 │   └── test_web_api.py           #   Web API 端点测试
+├── sessions/                     # 运行时会话数据（Git 忽略）
+│   └── sessions.json             #   持久化会话状态
+├── HEARTBEAT.md                  # 心跳任务定义（首次启动自动创建）
 ├── mcp.json                      # MCP 服务器配置
 ├── pyproject.toml                # 项目元数据与依赖
 ├── Dockerfile                    # Docker 镜像定义
@@ -342,7 +389,22 @@ AgentLoop ──publish_outbound──> MessageBus.outbound ──consume──>
 - **`MessageBus`**（`agent/bus/bus.py`）：两个 `queue.Queue` 实例 — `inbound` 和 `outbound`。
 - **`BaseChannel`**（`agent/integration/base.py`）：抽象基类，包含 `send(msg)` 和 `start()` 方法。所有平台集成均实现此接口。
 - **`ChannelManager`**（`agent/integration/manager.py`）：发现所有通道，在守护线程中启动，分发出站消息。
-- **`AgentLoop`**（`agent/server.py`）：在守护线程中运行，消费 `inbound` 消息，调用 Agent，发布到 `outbound`。
+- **`AgentLoop`**（`agent/server.py`）：在守护线程中运行，消费 `inbound` 消息，调用 Agent，发布到 `outbound`。接受可选的 `SessionManager` 来追踪每条消息的会话。
+
+### 心跳服务
+
+周期性任务执行服务，读取工作区的 `HEARTBEAT.md`：
+
+- **`HeartbeatService`**（`agent/heartbeat/heatbeat.py`）：在守护线程中运行，默认每 30 分钟检查一次 `HEARTBEAT.md`。
+- **决策流程**：读取 `HEARTBEAT.md` → LLM 决策 `run` 或 `skip` → 如果 `run`，通过 Agent 执行任务 → 通知最近活跃的通道会话。
+- **`HeartBeatResult`**：Pydantic 模型，包含 `action`（run/skip）和 `tasks`（自然语言摘要）。
+
+### 会话管理器
+
+跨通道跟踪对话，支持会话感知操作：
+
+- **`SessionManager`**（`agent/session/manager.py`）：以 `{channel}:{chat_id}` 为键管理 `Session` 对象，持久化到 `sessions/sessions.json`。
+- `AgentLoop` 用于注册每条入站消息的会话，`HeartbeatService` 用于查找最近活跃会话以推送通知。
 
 ### 记忆与检查点
 
