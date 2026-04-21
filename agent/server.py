@@ -93,12 +93,12 @@ def get_agent(checkpointer: Checkpointer = InMemorySaver(), mcptools: list[BaseT
                 trigger= [
                     ("tokens",128000)
                 ],
-                keep=("tokens", 500000)
+                keep=("tokens", 80000)
             ),
             ContextEditingMiddleware(
                 edits=[
                     ClearToolUsesEdit(
-                        trigger=500000,
+                        trigger=64000,
                         keep=5,
                         clear_tool_inputs=False,
                         exclude_tools=[],
@@ -116,10 +116,13 @@ def get_agent(checkpointer: Checkpointer = InMemorySaver(), mcptools: list[BaseT
 
 class AgentLoop:
 
-    def __init__(self,bus: MessageBus, session_manager: SessionManager=None):
+    def __init__(
+            self,bus: MessageBus,
+            session_manager: SessionManager=None,
+            checkpoint: Checkpointer = InMemorySaver()):
         self.bus = bus
         self.session_manager = session_manager
-        self.agent = get_agent()
+        self.agent = get_agent(checkpointer=checkpoint)
         self._thread = threading.Thread(target=self.run, daemon=True)
 
 

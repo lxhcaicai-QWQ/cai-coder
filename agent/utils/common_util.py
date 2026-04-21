@@ -1,6 +1,9 @@
 import os
 from pathlib import Path
 
+from agent.utils.logger import get_logger
+
+log = get_logger("common_util")
 
 def find_project_root(start_path=None) -> Path:
     current = Path(start_path or __file__).resolve()
@@ -54,3 +57,28 @@ def ensure_dir(path: Path) -> Path:
     """Ensure directory exists, return it."""
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def init_workspace_templates(workspace: Path) -> list[str]:
+    """Create workspace template files. Only create missing files."""
+    from importlib.resources import files
+
+    temp_path = files("agent") / "templates"
+
+    added_files: list[str] = []
+
+    def write_file(src, dest: Path):
+        if dest.exists():
+            return
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(src.read_text(encoding="utf-8") if src else "", encoding="utf-8")
+        added_files.append(str(dest.relative_to(workspace)))
+
+    for item in temp_path.iterdir():
+        if item.name.endswith(".md"):
+            write_file(item, workspace / item.name)
+
+    for name in added_files:
+        log.info(f"init workspace template: create file {name}")
+
+    return added_files

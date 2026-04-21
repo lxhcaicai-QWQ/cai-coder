@@ -81,6 +81,12 @@ class FeishuChannel(BaseChannel):
         chat_id = msg.chat_id
         content = msg.content
         metadata = msg.metadata
+
+        # 如果metadata 没有额外的消息，则主动发消息
+        if metadata == {}:
+            self._send_message(chat_id=chat_id,text=content)
+            return
+
         message_id = metadata["message_id"]
         reaction_id = metadata["reaction_id"]
         # 删除表情
@@ -245,14 +251,23 @@ class FeishuChannel(BaseChannel):
             chat_id: 聊天 ID
             text: 消息文本
         """
-        reply = {"text": text}
+        reply = {
+            "zh_cn": {
+                "content": [
+                    [{
+                        "tag": "md",
+                        "text": text
+                    }]
+                ]
+            }
+        }
         content = json.dumps(reply, ensure_ascii=False, indent=2)
         try:
             request = CreateMessageRequest.builder() \
                 .receive_id_type("chat_id") \
                 .request_body(CreateMessageRequestBody.builder()
                               .receive_id(chat_id)
-                              .msg_type("text")
+                              .msg_type("post")
                               .content(content)
                               .build()) \
                 .build()

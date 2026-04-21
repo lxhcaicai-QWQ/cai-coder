@@ -4,7 +4,7 @@
 
 ## Project Overview
 
-**cai-coder** is an AI coding agent built with **Python 3.11+**, powered by **LangChain** + **LangGraph**. It features a progressive skill-loading mechanism, a set of built-in tools (file I/O, shell, HTTP, weather), MCP tool integration, a middleware-based architecture for extensible agent behavior, an OpenAI-compatible Web API via FastAPI, and a **Feishu (Lark) bot integration** for chat-based interaction.
+**cai-coder** is an AI coding agent built with **Python 3.11+**, powered by **LangChain** + **LangGraph**. It features a progressive skill-loading mechanism, a set of built-in tools (file I/O, shell, HTTP, weather), MCP tool integration, a middleware-based architecture for extensible agent behavior, an OpenAI-compatible Web API via FastAPI, a **Feishu (Lark) bot integration** for chat-based interaction, a **heartbeat service** for periodic task execution, and a **session manager** for tracking conversations across channels.
 
 - **Primary language**: Python 3.11+
 - **Key frameworks**: LangChain (`>=1.2.9`), LangGraph (`>=1.0.8`), langchain-openai (`==1.1.10`), FastAPI (`>=0.115.0`)
@@ -17,7 +17,7 @@
 ```
 cai-coder/
 ├── agent/                   # Core agent package
-│   ├── main.py              # Unified entry: MessageBus + ChannelManager + AgentLoop + Web API
+│   ├── main.py              # Unified entry: MessageBus + ChannelManager + AgentLoop + HeartbeatService + Web API
 │   ├── cli.py               # CLI entry point (interactive async REPL)
 │   ├── server.py            # Agent factory (LLM, tools, middleware, memory) + AgentLoop
 │   ├── prompt.py            # System prompt construction (modular sections)
@@ -40,6 +40,14 @@ cai-coder/
 │   │   ├── agents-md-generator/
 │   │   ├── python-patterns/
 │   │   └── python-testing/
+│   ├── heartbeat/           # Heartbeat service for periodic task execution
+│   │   ├── __init__.py
+│   │   └── heatbeat.py      # HeartbeatService — reads HEARTBEAT.md, decides via LLM, executes tasks
+│   ├── session/             # Session management for multi-channel conversations
+│   │   ├── __init__.py      # Exports Session, SessionManager
+│   │   └── manager.py       # SessionManager — CRUD for sessions persisted to sessions.json
+│   ├── templates/           # Workspace template files (copied to WORKING_DIR on startup)
+│   │   └── HEARTBEAT.md     # Default heartbeat task template
 │   ├── integration/         # External platform integrations (channel abstraction)
 │   │   ├── base.py          # BaseChannel ABC (send, start, _handle_message)
 │   │   ├── manager.py       # ChannelManager (discovers, starts, dispatches)
@@ -48,7 +56,7 @@ cai-coder/
 │   │       ├── bot.py       # FeishuChannel(BaseChannel): WS bot, reactions, reply
 │   │       └── config.py    # Feishu app credentials & session config
 │   └── utils/
-│       ├── common_util.py   # Project root finder
+│       ├── common_util.py   # Project root finder, path resolver, workspace init
 │       ├── logger.py        # loguru setup & get_logger helper
 │       ├── mcp_util.py      # MCP tool loader (reads mcp.json)
 │       └── skill.py         # Skill discovery, parsing, rendering
@@ -56,6 +64,7 @@ cai-coder/
 │   └── snake-game/
 ├── tests/                   # Test suite
 │   ├── file/                # File-related test fixtures
+│   ├── sessions/            # Session test data
 │   ├── skills/              # Skill-specific tests
 │   ├── snake-game/          # Snake game tests (git-ignored)
 │   ├── test_agent.py
@@ -63,13 +72,18 @@ cai-coder/
 │   ├── test_agent_loop.py
 │   ├── test_agent_mcp.py
 │   ├── test_feishu_channel.py
+│   ├── test_heartbeat.py
 │   ├── test_http_request.py
+│   ├── test_session_manager.py
 │   ├── test_skills_loader.py
 │   ├── test_tools.py
 │   ├── test_utils_config.py
 │   └── test_web_api.py      # Web API endpoint tests
+├── sessions/                # Runtime session data (git-ignored)
+│   └── sessions.json        # Persisted session state
 ├── pyproject.toml           # Project metadata & dependencies
 ├── mcp.json                 # MCP server configuration
+├── HEARTBEAT.md             # Heartbeat task definitions (auto-created from template)
 ├── Dockerfile               # Docker image definition
 ├── docker-compose.yaml      # Docker Compose deployment
 ├── .example.env             # Environment variable template
@@ -106,13 +120,13 @@ pip install -e .
 pip install -e ".[dev]"
 ```
 
-### Run the unified entry (Web API + all channels + AgentLoop)
+### Run the unified entry (Web API + all channels + Heartbeat + AgentLoop)
 
 ```bash
 python agent/main.py
 ```
 
-> Starts the `MessageBus`, `ChannelManager` (discovers and starts all registered channels, e.g. Feishu), `AgentLoop` (consumes inbound messages, invokes agent, publishes outbound), and the FastAPI Web API server (port 8000). The Feishu bot and other channels run in daemon threads.
+> Starts: `init_workspace_templates` (copies template files to `WORKING_DIR`), `SessionManager`, `MessageBus`, `ChannelManager` (discovers and starts all registered channels, e.g. Feishu), `HeartbeatService` (periodic task execution), `AgentLoop` (consumes inbound messages, invokes agent, publishes outbound), and the FastAPI Web API server (port 8000). The Feishu bot, heartbeat, and other services run in daemon threads.
 
 ### Run the CLI agent
 
@@ -172,7 +186,7 @@ AgentLoop ──publish_outbound──> MessageBus.outbound ──consume──>
 
 - **`MessageBus`** (`agent/bus/bus.py`): Two `queue.Queue` instances — `inbound` and `outbound`.
 - **`InMessage` / `OutMessage`** (`agent/bus/events.py`): Dataclasses carrying `channel`, `chat_id`, `content`, `metadata`.
-- **`AgentLoop`** (`agent/server.py`): Runs in a daemon thread; consumes from `inbound`, invokes the agent, publishes to `outbound`.
+- **`AgentLoop`** (`agent/server.py`): Runs in a daemon thread; consumes from `inbound`, invokes the agent, publishes to `outbound`. Accepts an optional `SessionManager` to track sessions per message.
 
 ### Channel Abstraction
 All external platform integrations implement `BaseChannel` (`agent/integration/base.py`):
@@ -180,6 +194,21 @@ All external platform integrations implement `BaseChannel` (`agent/integration/b
 - **`BaseChannel`**: Abstract base with `send(msg)` and `start()` methods. Provides `_handle_message()` to publish to the bus.
 - **`ChannelManager`** (`agent/integration/manager.py`): Discovers all channels via `register.py`, starts each in a daemon thread, dispatches outbound messages.
 - **`register.py`** (`agent/integration/register.py`): Registry mapping channel names to `BaseChannel` instances. To add a new channel, add it here.
+
+### Heartbeat Service (`agent/heartbeat/`)
+A periodic task execution service that reads `HEARTBEAT.md` from the workspace:
+
+- **`HeartbeatService`** (`agent/heartbeat/heatbeat.py`): Runs in a daemon thread, checks `HEARTBEAT.md` every 30 minutes by default.
+- **Decision flow**: Reads `HEARTBEAT.md` → LLM decides `run` or `skip` → If `run`, executes tasks via the agent → Notifies the most recently active channel session.
+- **`HeartBeatResult`**: Pydantic model with `action` (run/skip) and `tasks` (natural language summary).
+- **`HEARTBEAT.md`**: Auto-created from `agent/templates/HEARTBEAT.md` on startup via `init_workspace_templates`. Users add periodic tasks here.
+
+### Session Manager (`agent/session/`)
+Tracks conversations across channels for session-aware operations:
+
+- **`SessionManager`** (`agent/session/manager.py`): Manages `Session` objects keyed by `{channel}:{chat_id}`. Persists to `sessions/sessions.json` in the workspace.
+- **`Session`**: Dataclass with `key`, `created_at`, `updated_at`.
+- Used by `AgentLoop` to register each inbound message's session, and by `HeartbeatService` to find the most recently active session for notifications.
 
 ### Progressive Skill Loading
 Skills are defined as subdirectories under `agent/skills/`, each containing a `SKILL.md` with YAML frontmatter (`name`, `description`) and a markdown body. The `SkillMiddleware` injects available skill summaries into the system prompt at runtime; agents call `load_skill(name)` to pull in full instructions on demand.
@@ -193,8 +222,8 @@ The agent uses a layered middleware pipeline (configured in `server.py`):
 | `TodoListMiddleware` | Manages task tracking and progress visibility |
 | `ToolRetryMiddleware` | Retries failed tool calls (max 3, exponential backoff) |
 | `ModelRetryMiddleware` | Retries failed model calls (max 3, exponential backoff) |
-| `SummarizationMiddleware` | Summarizes conversation when token count exceeds threshold (128k) |
-| `ContextEditingMiddleware` | Clears old tool uses when context exceeds token limit (500k), keeps last 5 |
+| `SummarizationMiddleware` | Summarizes conversation when token count exceeds 128k, keeps last 80k tokens |
+| `ContextEditingMiddleware` | Clears old tool uses when context exceeds 64k tokens, keeps last 5 |
 
 ### MCP Tool Integration
 MCP (Model Context Protocol) tools are loaded at startup via `agent/utils/mcp_util.py`, which reads `mcp.json` from the project root. MCP tools are merged with built-in tools and passed to the agent. To add MCP servers, edit `mcp.json`.
@@ -204,6 +233,9 @@ All tools live in `agent/tools/` as individual modules, exported via `agent/tool
 
 ### Prompt Construction
 The system prompt is assembled in `agent/prompt.py` from modular sections (role, working environment, project setup, editing constraints, tool usage, git hygiene). Modifications should be made in the corresponding section constant, not hardcoded elsewhere.
+
+### Workspace Templates (`agent/templates/`)
+Template files are copied to the workspace (`WORKING_DIR`) on startup via `init_workspace_templates()` in `common_util.py`. Only files that don't already exist in the workspace are created. Currently includes `HEARTBEAT.md`.
 
 ### Logging
 All logging uses **loguru** via `agent/utils/logger.py`. Use `get_logger(name)` to obtain a bound logger instance. Log level is configurable via the `LOG_LEVEL` environment variable (defaults to `INFO`).
@@ -242,6 +274,7 @@ All runtime configuration (LLM credentials, model, working dir, Feishu credentia
 - **Do not** modify files under `agent/skills/*/SKILL.md` unless explicitly asked.
 - **Do not** commit `.local.env` or `*.db` files — they are git-ignored and contain secrets/data.
 - **Do not** commit `tests/snake-game/` — it is git-ignored.
+- **Do not** commit `sessions/` — it is git-ignored and contains runtime session data.
 - **Do** run `pytest` after making changes to `agent/` to verify nothing is broken.
 - **Do** follow the existing pattern when adding new tools (one module per tool, export from `__init__.py`, register in `server.py`).
 - **Do** follow the existing pattern when adding new skills (subdirectory under `agent/skills/` with a `SKILL.md` containing YAML frontmatter).
