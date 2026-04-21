@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from langgraph.checkpoint.memory import InMemorySaver
+
 from agent import webapp
 from agent.bus.bus import MessageBus
 from agent.bus.events import OutMessage
@@ -12,7 +14,8 @@ from agent.utils.logger import get_logger
 
 logger = get_logger("main")
 working_dir = get_working_dir()
-direct_agent = get_agent()
+checkpoint = InMemorySaver()
+direct_agent = get_agent(checkpointer=checkpoint)
 
 def gateway():
 
@@ -47,7 +50,7 @@ def gateway():
             },
             config=config
         )
-
+        checkpoint.delete_thread("heart_beat")
         return response["messages"][-1].content
 
     def on_heartbeat_notify(content: str)->str:
@@ -69,7 +72,7 @@ def gateway():
     )
 
 
-    agent_loop = AgentLoop(bus=bus,session_manager=session_manager)
+    agent_loop = AgentLoop(bus=bus,session_manager=session_manager,checkpoint=checkpoint)
     agent_loop.start()
     heartbeat.start()
 
