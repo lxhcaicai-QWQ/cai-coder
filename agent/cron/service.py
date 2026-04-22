@@ -59,27 +59,90 @@ class CronService:
         self.max_sleep_ms = max_sleep_ms
 
         self._jobs: list[CronJob] = []
-        self._lock = threading.Lock()  # 保护 _jobs 列表的线程安全
+        self._lock = threading.RLock()  # 保护 _jobs 列表的线程安全
+        self._condition = threading.Condition(self._lock)
 
         self._running = False
         self._thread: threading.Thread | None = None
-        self._stop_event = threading.Event()  # Used to wake up sleep and stop threads
-
 
     def start(self):
         """Start background scheduled thread"""
         if self._running:
             return
         self._running = True
-        self._stop_event.clear()
 
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
         log.info("Cron service started.")
 
+    def stop(self):
+        if not self._running:
+            log.info("Cron service already stopped.")
+            return
+        with self._condition:
+            self._running = False
+            self._condition.notify_all() # Wake up possibly sleeping threads and make them exit
+
+        if self._thread:
+            self._thread.join(timeout=2.0)
+        log.info("Cron service stopped.")
+
     def _run_loop(self):
         """Main loop of the background thread: dynamic sleep + triggered execution"""
+        while self._running:
+            next_wake_ms = self._get_next_wake_ms()
 
+            if next_wake_ms is None:
+                delay_ms = self.max_sleep_ms
+            else:
+                delay_ms = min(self.max_sleep_ms, max(0, next_wake_ms - _now_ms()))
+
+            delay_s = delay_ms / 1000.0
+
+            with self._condition:
+                self._condition.wait(timeout=delay_s)
+
+            if not self._running:
+                break
+
+            self._on_timer()
+
+    def _on_timer(self):
+        """Time's up, scan and execute expired tasks"""
+        due_jobs = []
+        with self._lock:
+            now = _now_ms()
+            for job in self._jobs:
+                if job.enabled and job.state.next_run_at_ms and now >= job.state.next_run_at_ms:
+                    due_jobs.append(job)
+
+
+        for job in due_jobs:
+            self._execute_job(job)
+
+    def _execute_job(self, job: CronJob) -> None:
+        """Execute a single task and update status"""
+        start_ms = _now_ms()
+        log.info(f"Cron: executing job '{job.name}' ({job.id})")
+
+        try:
+            if self.on_job:
+                self.on_job(job)
+            job.state.last_status = "ok"
+            job.state.last_error = None
+        except Exception as e:
+            job.state.last_status = "error"
+            job.state.last_error = str(e)
+            log.error(f"Cron: job '{job.name}' failed: {e}")
+
+        with self._lock:
+            job.state.last_run_at_ms = start_ms
+
+            if job.schedule.kind == "at":
+                job.enabled = False
+                job.state.next_run_at_ms = None
+            else:
+                job.state.next_run_at_ms = _compute_next_run(job.schedule, _now_ms())
 
     def _get_next_wake_ms(self):
 
@@ -103,7 +166,24 @@ class CronService:
             )
         )
 
-        with self._lock:
+        # 【关键修复】加锁修改列表，并 notify 唤醒后台线程
+        with self._condition:
             self._jobs.append(job)
+            self._condition.notify()
 
         return job
+
+    def remove_job(self, job_id: str) -> bool:
+        """Remove Task"""
+        with self._condition:
+            before_len = len(self._jobs)
+            self._jobs = [job for job in self._jobs if job.id != job_id]
+            changed = len(self._jobs) < before_len
+            if changed:
+                self._condition.notify()
+            return changed
+
+    def list_jobs(self) -> list[CronJob]:
+        """Get all task lists"""
+        with self._lock:
+            return list(self._jobs)
