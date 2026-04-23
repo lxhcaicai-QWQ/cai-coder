@@ -21,7 +21,7 @@ from .tools import (
     bash,
     http_request,
     http_get,
-    http_post
+    http_post, add_cronjob
 )
 from .prompt import construct_system_prompt
 from .utils.logger import get_logger
@@ -62,7 +62,8 @@ def get_agent(checkpointer: Checkpointer = InMemorySaver(), mcptools: list[BaseT
         bash,
         http_request,
         http_get,
-        http_post
+        http_post,
+        add_cronjob
     ]
 
     if mcptools:
