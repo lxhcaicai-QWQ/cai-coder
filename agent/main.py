@@ -3,7 +3,7 @@ from pathlib import Path
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent import webapp
-from agent.bus.bus import MessageBus
+from agent.bus.bus import global_message_bus
 from agent.bus.events import OutMessage
 from agent.heartbeat.heatbeat import HeartbeatService
 from agent.integration.manager import ChannelManager
@@ -22,7 +22,7 @@ def gateway():
     init_workspace_templates(Path(working_dir))
     session_manager = SessionManager(Path(working_dir))
 
-    bus = MessageBus()
+    bus = global_message_bus
     channel_manager = ChannelManager(bus)
     channel_manager.start_all()
 

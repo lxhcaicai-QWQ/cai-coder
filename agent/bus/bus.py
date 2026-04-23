@@ -20,3 +20,6 @@ class MessageBus:
 
     def consume_outbound(self) -> OutMessage:
         return self.outbound.get()
+
+# Global Event Bus
+global_message_bus = MessageBus()
