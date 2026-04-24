@@ -12,8 +12,8 @@ class MessageBus:
     def publish_inbound(self, msg: InMessage) -> None:
         self.inbound.put(msg)
 
-    def consume_inbound(self) -> InMessage:
-        return self.inbound.get()
+    def consume_inbound(self, timeout: float = None) -> InMessage:
+        return self.inbound.get(timeout=timeout)
 
     def publish_outbound(self, msg: OutMessage) -> None:
         self.outbound.put(msg)

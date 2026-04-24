@@ -124,12 +124,17 @@ class AgentLoop:
         self.bus = bus
         self.session_manager = session_manager
         self.agent = get_agent(checkpointer=checkpoint)
+        self._running = False
         self._thread = threading.Thread(target=self.run, daemon=True)
 
 
     def run(self):
-        while True:
-            msg = self.bus.consume_inbound()
+        self._running = True
+        while self._running:
+            try:
+                msg = self.bus.consume_inbound(timeout=5)
+            except Exception:
+                continue
             if msg is None:
                 continue
             content = msg.content
@@ -153,3 +158,6 @@ class AgentLoop:
 
     def start(self):
         self._thread.start()
+
+    def stop(self):
+        self._running = False

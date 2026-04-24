@@ -1,4 +1,6 @@
 import json
+import os
+import tempfile
 from datetime import datetime
 from dataclasses import field, dataclass, asdict
 from pathlib import Path
@@ -76,8 +78,16 @@ class SessionManager:
     def _save(self):
         session_path = self._get_session_path()
         cache_to_save = {k: v.to_dict() for k, v in self._cache.items()}
-        with open(session_path, 'w', encoding='utf-8') as f:
-            f.write(json.dumps(cache_to_save, ensure_ascii=False, indent=2))
+        data = json.dumps(cache_to_save, ensure_ascii=False, indent=2)
+        dir_path = session_path.parent
+        fd, tmp_path = tempfile.mkstemp(dir=dir_path, suffix=".tmp")
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                f.write(data)
+            os.replace(tmp_path, session_path)
+        except Exception:
+            os.unlink(tmp_path)
+            raise
 
     def list_sessions(self) -> list[Session]:
         sessions = self._cache.values()

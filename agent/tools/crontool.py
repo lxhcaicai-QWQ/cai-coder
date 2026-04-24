@@ -66,8 +66,8 @@ def add_cronjob(
             every_ms=time_ms
         )
 
-    configurable = runtime.config.get("configurable") if runtime.config else None
-    chat_id = configurable.get("thread_id") if configurable else None
+    configurable = runtime.config.get("configurable") if runtime.config else {}
+    chat_id = configurable.get("thread_id")
 
     payload = {
         "chat_id": chat_id,
@@ -75,7 +75,6 @@ def add_cronjob(
         "message": message
     }
     added = _service.add_job(name, schedule=sched, payload=payload)
-    _service.start()
 
     log.debug(f"add cron job: {name} message:{message}")
 
