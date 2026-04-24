@@ -1,5 +1,7 @@
+import uuid
 from typing import Literal
 
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.prebuilt import ToolRuntime
 
 from agent.bus.bus import global_message_bus
@@ -8,19 +10,53 @@ from agent.cron import CronService, CronJob, CronSchedule
 
 from langchain_core.tools import tool
 
+from agent.subagents import get_sub_agent
 from agent.utils.logger import get_logger
 
 log = get_logger("cron_tool")
+
+_checkpoint = InMemorySaver()
+
+_cronjob_agent = get_sub_agent(
+    sys_prompt="You are a sub-agent for a scheduled task, and you will be scheduled to work.",
+    checkpointer=_checkpoint
+)
+
+
+def _handle_message(content: str) -> str:
+    uid: str = str(uuid.uuid4())
+    config = {"configurable": {"thread_id": uid}}
+    response = _cronjob_agent.invoke(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": content
+                }
+            ]
+        },
+        config=config
+    )
+    _checkpoint.delete_thread(uid)
+    return response["messages"][-1].content
 
 def push_message(job:CronJob):
     payload = job.payload
     channel = payload["channel"]
     chat_id = payload["chat_id"]
     message = payload["message"]
+    event = payload["event"]
+
+    if event == "system_event":
+        content = message
+    else:
+        log.info("The cronjob agent is processing the task")
+        content = _handle_message(message)
+
     out_message = OutMessage(
         channel=channel,
         chat_id=chat_id,
-        content=message,
+        content=content,
         metadata={}
     )
     global_message_bus.publish_outbound(out_message)
@@ -34,6 +70,7 @@ def add_cronjob(
         name: str,
         message: str,
         channel: Literal["feishu", "cli"],
+        event: Literal["system_event", "agent_turn"],
         runtime: ToolRuntime
 ) -> CronJob:
     """
@@ -47,10 +84,15 @@ def add_cronjob(
             - 当 kind 为 "at" 时：必须是未来的**绝对时间戳**（如 Unix 毫秒级时间戳 1690000000000）。禁止传入相对时间！
             - 当 kind 为 "every" 时：表示执行的间隔时长（如 5000 代表每 5 秒执行一次）。
         name (str): 定时任务的唯一名称标识，用于后续管理、查询或取消任务。
-        message (str): 定时任务触发时需要发送的具体消息内容。请直接填入用户希望发送的完整文本。
+        message (str): 定时任务触发时需要发送的具体消息内容。
+            - 当 event 为 "system_event" 时：请直接填入用户希望发送的完整文本。
+            - 当 event 为 "agent_turn" 时：把事情描述给Agent, Agent会自动执行。
         channel (Literal["feishu", "cli"]): 任务触发后的消息推送渠道。
-            - "feishu": 推送到飞书。
-            - "cli": 推送到本地命令行终端。
+            - "feishu": 推送到飞书，默认推送渠道为feishu。
+            - "cli": 推送到本地命令行终端，除非用户说推送到终端，否则不走这个channel。
+        event (Literal["system_event", "agent_turn"]): 消息的处理与发送方式。
+            - "system_event": 将 message 作为纯文本直接推送到渠道。
+            - "agent_turn": 将 message 作为工作内容交由 Agent 处理，然后将 Agent 的回复内容推送到渠道。
 
     Returns:
         CronJob: 成功创建的定时任务对象，包含任务状态等详细信息。
@@ -72,7 +114,8 @@ def add_cronjob(
     payload = {
         "chat_id": chat_id,
         "channel": channel,
-        "message": message
+        "message": message,
+        "event": event
     }
     added = _service.add_job(name, schedule=sched, payload=payload)
 
