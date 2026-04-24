@@ -4,7 +4,7 @@
 
 ## Project Overview
 
-**cai-coder** is an AI coding agent built with **Python 3.11+**, powered by **LangChain** + **LangGraph**. It features a progressive skill-loading mechanism, a set of built-in tools (file I/O, shell, HTTP, weather), MCP tool integration, a middleware-based architecture for extensible agent behavior, an OpenAI-compatible Web API via FastAPI, a **Feishu (Lark) bot integration** for chat-based interaction, a **heartbeat service** for periodic task execution, and a **session manager** for tracking conversations across channels.
+**cai-coder** is an AI coding agent built with **Python 3.11+**, powered by **LangChain** + **LangGraph**. It features a progressive skill-loading mechanism, a set of built-in tools (file I/O, shell, HTTP, weather, cron jobs), MCP tool integration, a middleware-based architecture for extensible agent behavior, an OpenAI-compatible Web API via FastAPI, a **Feishu (Lark) bot integration** for chat-based interaction, a **heartbeat service** for periodic task execution, a **session manager** for tracking conversations across channels, a **cron service** for scheduled task execution, and a **sub-agent service** for spawning isolated agent instances.
 
 - **Primary language**: Python 3.11+
 - **Key frameworks**: LangChain (`>=1.2.9`), LangGraph (`>=1.0.8`), langchain-openai (`==1.1.10`), FastAPI (`>=0.115.0`)
@@ -17,7 +17,7 @@
 ```
 cai-coder/
 ├── agent/                   # Core agent package
-│   ├── main.py              # Unified entry: MessageBus + ChannelManager + AgentLoop + HeartbeatService + Web API
+│   ├── main.py              # Unified entry: MessageBus + ChannelManager + AgentLoop + HeartbeatService + CronService + Web API
 │   ├── cli.py               # CLI entry point (interactive async REPL)
 │   ├── server.py            # Agent factory (LLM, tools, middleware, memory) + AgentLoop
 │   ├── prompt.py            # System prompt construction (modular sections)
@@ -25,12 +25,19 @@ cai-coder/
 │   ├── bus/                 # Message bus for channel-agent communication
 │   │   ├── bus.py           # MessageBus (inbound/outbound queues)
 │   │   └── events.py        # InMessage / OutMessage dataclasses
+│   ├── cron/                # Cron service for scheduled task execution
+│   │   ├── __init__.py      # Exports CronSchedule, CronJobState, CronJob, CronService
+│   │   └── service.py       # CronService — background scheduler with add/remove/list jobs
 │   ├── middleware/           # Agent middleware
 │   │   ├── __init__.py      # Middleware exports
 │   │   └── skill_middleware.py  # SkillMiddleware — progressive skill loading
+│   ├── subagents/           # Sub-agent factory for isolated agent instances
+│   │   ├── __init__.py      # Exports get_sub_agent
+│   │   └── service.py       # get_sub_agent — creates lightweight agents with tools + middleware
 │   ├── tools/               # Built-in tools
 │   │   ├── __init__.py      # Tool exports
 │   │   ├── bash.py
+│   │   ├── crontool.py      # add_cronjob tool + CronService integration
 │   │   ├── get_weather.py
 │   │   ├── http_request.py  # http_request, http_get, http_post
 │   │   ├── ls.py
@@ -71,6 +78,7 @@ cai-coder/
 │   ├── test_agent_generate_code.py
 │   ├── test_agent_loop.py
 │   ├── test_agent_mcp.py
+│   ├── test_cron.py
 │   ├── test_feishu_channel.py
 │   ├── test_heartbeat.py
 │   ├── test_http_request.py
@@ -120,13 +128,13 @@ pip install -e .
 pip install -e ".[dev]"
 ```
 
-### Run the unified entry (Web API + all channels + Heartbeat + AgentLoop)
+### Run the unified entry (Web API + all channels + Heartbeat + CronService + AgentLoop)
 
 ```bash
 python agent/main.py
 ```
 
-> Starts: `init_workspace_templates` (copies template files to `WORKING_DIR`), `SessionManager`, `MessageBus`, `ChannelManager` (discovers and starts all registered channels, e.g. Feishu), `HeartbeatService` (periodic task execution), `AgentLoop` (consumes inbound messages, invokes agent, publishes outbound), and the FastAPI Web API server (port 8000). The Feishu bot, heartbeat, and other services run in daemon threads.
+> Starts: `init_workspace_templates` (copies template files to `WORKING_DIR`), `SessionManager`, `MessageBus`, `ChannelManager` (discovers and starts all registered channels, e.g. Feishu), `HeartbeatService` (periodic task execution), `CronService` (scheduled task execution), `AgentLoop` (consumes inbound messages, invokes agent, publishes outbound), and the FastAPI Web API server (port 8000). The Feishu bot, heartbeat, cron, and other services run in daemon threads.
 
 ### Run the CLI agent
 
@@ -153,7 +161,7 @@ pytest
 # With verbose output
 pytest -v
 # Run a specific test file
-pytest tests/test_agent.py
+pytest tests/test_cron.py
 ```
 
 > Tests read environment variables from `.local.env` via `pytest-env` (`env_files = ".local.env"`).
@@ -195,6 +203,23 @@ All external platform integrations implement `BaseChannel` (`agent/integration/b
 - **`ChannelManager`** (`agent/integration/manager.py`): Discovers all channels via `register.py`, starts each in a daemon thread, dispatches outbound messages.
 - **`register.py`** (`agent/integration/register.py`): Registry mapping channel names to `BaseChannel` instances. To add a new channel, add it here.
 
+### Cron Service (`agent/cron/`)
+A background scheduled task execution service with thread-safe job management:
+
+- **`CronService`** (`agent/cron/service.py`): Runs in a daemon thread, manages scheduled jobs with dynamic sleep and `Condition`-based wake-up. Supports `add_job()`, `remove_job()`, `list_jobs()`.
+- **`CronSchedule`**: Defines schedule type — `kind="every"` (periodic, interval in `every_ms`) or `kind="at"` (one-time, absolute timestamp in `at_ms`).
+- **`CronJob`**: Dataclass with `id`, `name`, `schedule`, `state` (`CronJobState`), and `payload` (arbitrary data passed to the callback).
+- **`add_cronjob` tool** (`agent/tools/crontool.py`): LangChain `@tool` that exposes cron scheduling to the agent. Accepts `kind`, `time_ms`, `name`, `message`, `channel`, `event` parameters. When a job fires:
+  - `event="system_event"`: Pushes `message` as-is to the target channel.
+  - `event="agent_turn"`: Invokes a **sub-agent** to process `message`, then pushes the result.
+- **Lifecycle**: The `CronService` is started in `main.py` alongside other services (`cron_service.start()`).
+
+### Sub-Agent Service (`agent/subagents/`)
+Factory for creating lightweight, isolated agent instances used by the cron service and other subsystems:
+
+- **`get_sub_agent()`** (`agent/subagents/service.py`): Creates a standalone agent with a custom system prompt, `InMemorySaver` checkpointer, built-in tools (weather, file I/O, shell, HTTP), optional MCP tools, and a reduced middleware stack (`SkillMiddleware`, `TodoListMiddleware`).
+- Used by `crontool.py` to process `agent_turn` events asynchronously.
+
 ### Heartbeat Service (`agent/heartbeat/`)
 A periodic task execution service that reads `HEARTBEAT.md` from the workspace:
 
@@ -229,7 +254,7 @@ The agent uses a layered middleware pipeline (configured in `server.py`):
 MCP (Model Context Protocol) tools are loaded at startup via `agent/utils/mcp_util.py`, which reads `mcp.json` from the project root. MCP tools are merged with built-in tools and passed to the agent. To add MCP servers, edit `mcp.json`.
 
 ### Tool Registration
-All tools live in `agent/tools/` as individual modules, exported via `agent/tools/__init__.py`. New tools should follow the same pattern — define a function decorated with `@tool` and register it in `server.py`.
+All tools live in `agent/tools/` as individual modules, exported via `agent/tools/__init__.py`. New tools should follow the same pattern — define a function decorated with `@tool` and register it in `server.py` (and in `agent_tools` list).
 
 ### Prompt Construction
 The system prompt is assembled in `agent/prompt.py` from modular sections (role, working environment, project setup, editing constraints, tool usage, git hygiene). Modifications should be made in the corresponding section constant, not hardcoded elsewhere.
@@ -244,6 +269,7 @@ All logging uses **loguru** via `agent/utils/logger.py`. Use `get_logger(name)` 
 - **Default / Web API**: `InMemorySaver` (ephemeral, for testing/programmatic use).
 - **CLI**: `AsyncSqliteSaver` backed by `cai-coder-sqlite.db` for persistent conversation state across sessions.
 - **Feishu / Channel mode**: `InMemorySaver` via `get_agent()` in `AgentLoop`.
+- **Sub-agents / Cron**: `InMemorySaver` — thread-scoped, cleaned up after each invocation.
 
 ### Web API (`agent/webapp.py`)
 A FastAPI application providing an **OpenAI-compatible** chat completions API:
@@ -280,5 +306,6 @@ All runtime configuration (LLM credentials, model, working dir, Feishu credentia
 - **Do** follow the existing pattern when adding new skills (subdirectory under `agent/skills/` with a `SKILL.md` containing YAML frontmatter).
 - **Do** follow the existing pattern when adding new integrations (implement `BaseChannel`, register in `register.py`).
 - **Do** follow the existing pattern when adding new middleware (implement `AgentMiddleware`, add to the middleware list in `server.py`).
+- **Do** follow the existing pattern when adding scheduled tasks (use the `CronService` API or `add_cronjob` tool).
 - Code identifiers and error messages should be in **English**; user-facing explanations in **Chinese**.
 - Keep the project compatible with Python 3.11+ (no version-exclusive syntax beyond 3.11).
