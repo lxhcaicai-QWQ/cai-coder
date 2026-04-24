@@ -41,7 +41,7 @@ class BaseChannel(ABC):
 
 
     @abstractmethod
-    async def start(self) -> None:
+    def start(self) -> None:
         """
         Start the channel and begin listening for messages.
         """

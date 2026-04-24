@@ -21,16 +21,18 @@
 
 ## 项目简介
 
-**cai-coder** 是一个基于 **Python**、**LangChain** 和 **LangGraph** 构建的 AI 编程助手 Agent。它采用独特的 **渐进式技能加载** 机制——Agent 默认保持轻量的基础状态，只有在用户触发特定需求时才动态加载专业技能，兼顾了效率与灵活性。同时支持 **MCP (Model Context Protocol)** 工具集成，可无缝扩展 Agent 能力，通过 FastAPI 提供 **OpenAI 兼容的 Web API** 接口，集成了 **飞书机器人** 支持在群聊中直接使用 AI 编程助手，并提供了 **心跳服务** 用于周期性任务执行和 **会话管理器** 用于跨通道的会话追踪。
+**cai-coder** 是一个基于 **Python**、**LangChain** 和 **LangGraph** 构建的 AI 编程助手 Agent。它采用独特的 **渐进式技能加载** 机制——Agent 默认保持轻量的基础状态，只有在用户触发特定需求时才动态加载专业技能，兼顾了效率与灵活性。同时支持 **MCP (Model Context Protocol)** 工具集成，可无缝扩展 Agent 能力，通过 FastAPI 提供 **OpenAI 兼容的 Web API** 接口，集成了 **飞书机器人** 支持在群聊中直接使用 AI 编程助手，提供了 **心跳服务** 用于周期性任务执行、**定时任务服务** 用于计划任务调度、**子代理服务** 用于创建隔离的 Agent 实例，以及 **会话管理器** 用于跨通道的会话追踪。
 
 ## 核心特性
 
 - **渐进式技能加载** — 根据用户意图按需加载技能，保持基础 Agent 的精简与高效。
-- **丰富的内置工具集** — 支持文件读写、Shell 命令执行、HTTP 请求、天气查询等操作。
+- **丰富的内置工具集** — 支持文件读写、Shell 命令执行、HTTP 请求、天气查询、定时任务调度等操作。
 - **MCP 工具集成** — 通过 `mcp.json` 配置外部 MCP 服务器，扩展 Agent 能力。
 - **OpenAI 兼容 Web API** — 基于 FastAPI 的 HTTP 接口，支持流式（SSE）和非流式模式，完全兼容 OpenAI `/v1/chat/completions` 接口规范。
 - **飞书机器人** — 基于飞书长连接 WebSocket 的机器人，支持在飞书群聊中直接使用 AI 编程助手。
 - **心跳服务** — 周期性读取 `HEARTBEAT.md`，由 LLM 决策是否执行任务，并通知活跃会话。
+- **定时任务服务** — 后台定时任务执行服务，支持一次性（`at`）和周期性（`every`）两种触发模式，通过 `add_cronjob` 工具与 Agent 集成。
+- **子代理服务** — 用于创建轻量级隔离 Agent 实例的工厂，处理委托任务（如定时任务的 `agent_turn` 事件）。
 - **会话管理器** — 跨通道跟踪对话，持久化到 `sessions/sessions.json`，支持会话感知操作。
 - **消息总线架构** — 中央 `MessageBus` 解耦了通道与 Agent，便于快速接入新的聊天平台。
 - **通道抽象层** — `BaseChannel` 接口支持可插拔的平台集成（飞书、Slack、Discord 等）。
@@ -69,6 +71,7 @@
 | `http_get` | 发送 GET 请求（快捷方法） |
 | `http_post` | 发送 POST 请求（快捷方法） |
 | `get_weather` | 查询指定位置的天气 |
+| `add_cronjob` | 创建定时任务（一次性或周期性），并将结果推送到指定通道 |
 | `load_skill` | 按需加载技能的完整指令 |
 
 ### 中间件流水线
@@ -129,13 +132,13 @@ LOG_LEVEL=INFO
 
 > `.local.env` 已被 Git 忽略，**切勿**将其提交到代码仓库。
 
-### 3. 运行统一入口（Web API + 飞书机器人 + 心跳服务）
+### 3. 运行统一入口（Web API + 飞书机器人 + 心跳服务 + 定时任务服务）
 
 ```bash
 python agent/main.py
 ```
 
-此命令会启动：**init_workspace_templates**（将模板文件复制到 `WORKING_DIR`）、**SessionManager**、**MessageBus**、**ChannelManager**（发现并启动所有已注册的通道，如飞书）、**HeartbeatService**（周期性任务执行）、**AgentLoop**（消费入站消息、调用 Agent、发布出站消息）以及 **FastAPI Web API 服务**（端口 8000）。所有服务以守护线程方式运行。
+此命令会启动：**init_workspace_templates**（将模板文件复制到 `WORKING_DIR`）、**SessionManager**、**MessageBus**、**ChannelManager**（发现并启动所有已注册的通道，如飞书）、**HeartbeatService**（周期性任务执行）、**CronService**（定时任务调度）、**AgentLoop**（消费入站消息、调用 Agent、发布出站消息）以及 **FastAPI Web API 服务**（端口 8000）。所有服务以守护线程方式运行。
 
 ### 4. 运行 CLI Agent
 
@@ -221,6 +224,57 @@ cai-coder 内置了**心跳服务**，会周期性读取工作区的 `HEARTBEAT.
 
 > **注意**：任务完成后请立即从 `HEARTBEAT.md` 中删除，以保持文件精简并减少 token 消耗。
 
+## 定时任务服务
+
+cai-coder 内置了**定时任务服务**（Cron Service），支持创建和管理定时任务，在指定时间点或周期性地将消息推送到通道（飞书、CLI 等）。
+
+### 工作原理
+
+1. `CronService`（`agent/cron/service.py`）在守护线程中运行，采用动态休眠和基于 `Condition` 的唤醒机制。
+2. 通过 `add_cronjob` 工具创建任务，支持以下参数：
+   - `kind`：`"at"`（一次性，绝对时间戳）或 `"every"`（周期性间隔）。
+   - `time_ms`：时间配置，单位为毫秒（`at` 模式为绝对时间戳，`every` 模式为间隔时长）。
+   - `name`：任务的唯一标识名称。
+   - `message`：任务触发时发送的内容。
+   - `channel`：目标通道（`"feishu"` 或 `"cli"`）。
+   - `event`：`"system_event"`（直接推送消息）或 `"agent_turn"`（由子代理处理后推送结果）。
+3. 任务触发时：
+   - **`system_event`**：将 `message` 直接推送到目标通道。
+   - **`agent_turn`**：由**子代理**处理 `message`，然后将结果推送到通道。
+
+### 示例：让 Agent 设置提醒
+
+```
+用户：5分钟后提醒我开会
+Agent：好的，我已为你创建了一个定时任务...
+```
+
+Agent 内部调用 `add_cronjob`，设置 `kind="at"`、计算后的绝对时间戳和 `event="system_event"` 来推送提醒。
+
+### 架构
+
+```
+add_cronjob 工具 → CronService.add_job() → CronJob（后台线程）
+                                              │
+                            ┌─────────────────┴──────────────────┐
+                            │  任务触发                          │
+                            ├─ event=system_event → 直接推送消息  │
+                            └─ event=agent_turn   → 子代理处理    │
+                                                     → 推送结果
+```
+
+- **`CronService`**（`agent/cron/service.py`）：线程安全的调度器，提供 `add_job()`、`remove_job()`、`list_jobs()` 接口。
+- **`CronSchedule`**：定义调度类型 — `kind="every"`（周期性，间隔为 `every_ms`）或 `kind="at"`（一次性，绝对时间戳为 `at_ms`）。
+- **`CronJob`** / **`CronJobState`**：任务定义与运行时状态的数据模型。
+- **`add_cronjob` 工具**（`agent/tools/crontool.py`）：LangChain `@tool`，将定时任务调度能力暴露给 Agent。
+
+## 子代理服务
+
+子代理服务（`agent/subagents/`）提供了创建轻量级隔离 Agent 实例的工厂，供定时任务服务和其他子系统使用。
+
+- **`get_sub_agent()`**（`agent/subagents/service.py`）：创建独立的 Agent 实例，包含自定义系统提示词、`InMemorySaver` 检查点存储、内置工具（天气、文件 I/O、Shell、HTTP）、可选的 MCP 工具，以及精简的中间件栈（`SkillMiddleware`、`TodoListMiddleware`）。
+- 被 `crontool.py` 用于处理 `agent_turn` 事件——子代理独立完成任务后，结果被转发到目标通道。
+
 ## 飞书机器人
 
 cai-coder 内置了**飞书（Lark）长连接 WebSocket 通道**，实现了 `BaseChannel` 接口，用户可以在飞书群聊中直接与 AI Agent 交互。
@@ -238,7 +292,7 @@ cai-coder 内置了**飞书（Lark）长连接 WebSocket 通道**，实现了 `B
 1. 在 [飞书开放平台](https://open.feishu.cn/) 创建应用
 2. 启用机器人能力并配置消息事件订阅
 3. 在 `.local.env` 中设置 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET`
-4. 通过 `python agent/main.py` 启动（启动 MessageBus + 所有通道 + 心跳服务 + Web API）
+4. 通过 `python agent/main.py` 启动（启动 MessageBus + 所有通道 + 心跳服务 + 定时任务服务 + Web API）
 
 ### 架构
 
@@ -291,7 +345,7 @@ pytest
 pytest -v
 
 # 运行指定测试文件
-pytest tests/test_agent.py
+pytest tests/test_cron.py
 ```
 
 > 测试通过 `pytest-env` 从 `.local.env` 加载环境变量。  
@@ -302,7 +356,7 @@ pytest tests/test_agent.py
 ```
 cai-coder/
 ├── agent/                        # 核心 Agent 包
-│   ├── main.py                   # 统一入口：MessageBus + ChannelManager + AgentLoop + HeartbeatService + Web API
+│   ├── main.py                   # 统一入口：MessageBus + ChannelManager + AgentLoop + HeartbeatService + CronService + Web API
 │   ├── cli.py                    # CLI 入口（异步交互式 REPL）
 │   ├── server.py                 # Agent 工厂（LLM、工具、中间件、记忆）+ AgentLoop
 │   ├── prompt.py                 # 系统提示词构建（模块化）
@@ -310,12 +364,19 @@ cai-coder/
 │   ├── bus/                      # 消息总线（通道与 Agent 通信）
 │   │   ├── bus.py                #   MessageBus（入站/出站队列）
 │   │   └── events.py             #   InMessage / OutMessage 数据类
+│   ├── cron/                     # 定时任务服务
+│   │   ├── __init__.py           #   导出 CronSchedule、CronJobState、CronJob、CronService
+│   │   └── service.py            #   CronService — 后台调度器，支持增删查任务
 │   ├── middleware/                # 中间件
 │   │   ├── __init__.py           #   中间件导出
 │   │   └── skill_middleware.py   #   SkillMiddleware — 渐进式技能加载
+│   ├── subagents/                # 子代理工厂（创建隔离的 Agent 实例）
+│   │   ├── __init__.py           #   导出 get_sub_agent
+│   │   └── service.py            #   get_sub_agent — 创建轻量级 Agent（工具 + 中间件）
 │   ├── tools/                    # 内置工具
 │   │   ├── __init__.py           #   工具导出
 │   │   ├── bash.py
+│   │   ├── crontool.py           #   add_cronjob 工具 + CronService 集成
 │   │   ├── get_weather.py
 │   │   ├── http_request.py
 │   │   ├── ls.py
@@ -355,6 +416,7 @@ cai-coder/
 │   ├── test_agent_generate_code.py
 │   ├── test_agent_loop.py
 │   ├── test_agent_mcp.py
+│   ├── test_cron.py              #   定时任务服务测试
 │   ├── test_feishu_channel.py
 │   ├── test_heartbeat.py
 │   ├── test_http_request.py
@@ -391,6 +453,25 @@ AgentLoop ──publish_outbound──> MessageBus.outbound ──consume──>
 - **`ChannelManager`**（`agent/integration/manager.py`）：发现所有通道，在守护线程中启动，分发出站消息。
 - **`AgentLoop`**（`agent/server.py`）：在守护线程中运行，消费 `inbound` 消息，调用 Agent，发布到 `outbound`。接受可选的 `SessionManager` 来追踪每条消息的会话。
 
+### 定时任务服务
+
+后台定时任务执行服务，提供线程安全的任务管理：
+
+- **`CronService`**（`agent/cron/service.py`）：在守护线程中运行，采用动态休眠和基于 `Condition` 的唤醒机制管理定时任务。提供 `add_job()`、`remove_job()`、`list_jobs()` 接口。
+- **`CronSchedule`**：定义调度类型 — `kind="every"`（周期性，间隔为 `every_ms`）或 `kind="at"`（一次性，绝对时间戳为 `at_ms`）。
+- **`CronJob`**：数据类，包含 `id`、`name`、`schedule`、`state`（`CronJobState`）和 `payload`（传递给回调的任意数据）。
+- **`add_cronjob` 工具**（`agent/tools/crontool.py`）：LangChain `@tool`，将定时任务调度能力暴露给 Agent。任务触发时：
+  - `event="system_event"`：将 `message` 直接推送到目标通道。
+  - `event="agent_turn"`：调用**子代理**处理 `message`，然后推送结果。
+- **生命周期**：`CronService` 在 `main.py` 中与其他服务一起启动（`cron_service.start()`）。
+
+### 子代理服务
+
+用于创建轻量级隔离 Agent 实例的工厂：
+
+- **`get_sub_agent()`**（`agent/subagents/service.py`）：创建独立的 Agent 实例，包含自定义系统提示词、`InMemorySaver` 检查点存储、内置工具、可选的 MCP 工具，以及精简的中间件栈（`SkillMiddleware`、`TodoListMiddleware`）。
+- 被 `crontool.py` 用于异步处理 `agent_turn` 事件。
+
 ### 心跳服务
 
 周期性任务执行服务，读取工作区的 `HEARTBEAT.md`：
@@ -413,6 +494,7 @@ AgentLoop ──publish_outbound──> MessageBus.outbound ──consume──>
 | **CLI** | `AsyncSqliteSaver`（`cai-coder-sqlite.db`） | 跨会话持久化 |
 | **Web API** | `InMemorySaver` | 内存存储（重启后丢失） |
 | **飞书 / 通道模式** | `InMemorySaver`（通过 `AgentLoop` 中的 `get_agent()`） | 内存存储（重启后丢失） |
+| **子代理 / 定时任务** | `InMemorySaver` — 线程作用域 | 内存存储（每次调用后清理） |
 
 ### Web API
 
@@ -444,7 +526,7 @@ AgentLoop ──publish_outbound──> MessageBus.outbound ──consume──>
 1. 在 `agent/tools/` 下创建新模块（如 `my_tool.py`）
 2. 使用 `@tool` 装饰器定义工具函数
 3. 在 `agent/tools/__init__.py` 中导出
-4. 在 `agent/server.py` 中注册
+4. 在 `agent/server.py` 中注册（添加到 `agent_tools` 列表）
 
 ### 添加新技能
 

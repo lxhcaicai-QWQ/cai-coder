@@ -3,7 +3,7 @@ from pathlib import Path
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent import webapp
-from agent.bus.bus import MessageBus
+from agent.bus.bus import global_message_bus
 from agent.bus.events import OutMessage
 from agent.heartbeat.heatbeat import HeartbeatService
 from agent.integration.manager import ChannelManager
@@ -11,6 +11,7 @@ from agent.server import AgentLoop, get_agent
 from agent.session import SessionManager
 from agent.utils.common_util import get_working_dir, init_workspace_templates
 from agent.utils.logger import get_logger
+from agent.tools.crontool import _service as cron_service
 
 logger = get_logger("main")
 working_dir = get_working_dir()
@@ -22,21 +23,19 @@ def gateway():
     init_workspace_templates(Path(working_dir))
     session_manager = SessionManager(Path(working_dir))
 
-    bus = MessageBus()
+    bus = global_message_bus
     channel_manager = ChannelManager(bus)
     channel_manager.start_all()
 
 
     def _get_heartbeat_target() -> tuple[str,str]:
         sessions = session_manager.list_sessions()
-        if not list:
+        if not sessions:
             return "cli", "skip"
-        for item in sessions:
-            key = item.key
-            channel, chat_id = key.split(":",1)
-            return channel, chat_id
-
-        return "cli", "skip"
+        # sessions 已按 updated_at 降序排列，取最近活跃的会话
+        first = sessions[0]
+        channel, chat_id = first.key.split(":", 1)
+        return channel, chat_id
 
     def on_heartbeat_execute(content: str)->str:
         config = {"configurable": {"thread_id": "heart_beat"}}
@@ -76,6 +75,7 @@ def gateway():
     agent_loop = AgentLoop(bus=bus,session_manager=session_manager,checkpoint=checkpoint)
     agent_loop.start()
     heartbeat.start()
+    cron_service.start()
 
 
 

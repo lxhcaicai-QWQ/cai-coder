@@ -1,5 +1,6 @@
 import json
 from typing import List, Optional, Dict, Any, AsyncGenerator
+import asyncio
 
 import uvicorn
 from fastapi import FastAPI, Request, HTTPException
@@ -91,21 +92,23 @@ async def list_models():
     }
 
 _agent_instance = None
+_agent_lock = asyncio.Lock()
 
 async def get_agent():
     global _agent_instance
-    if _agent_instance is None:
-        logger.debug("正在加载 MCP 工具...")
-        mcp_tools = await load_mcp_tools()
-        logger.debug(f"成功加载 {len(mcp_tools)} 个 MCP 工具")
+    async with _agent_lock:
+        if _agent_instance is None:
+            logger.debug("正在加载 MCP 工具...")
+            mcp_tools = await load_mcp_tools()
+            logger.debug(f"成功加载 {len(mcp_tools)} 个 MCP 工具")
 
-        _agent_instance = server.get_agent(
-            checkpointer= InMemorySaver(),
-            mcptools=mcp_tools
-        )
+            _agent_instance = server.get_agent(
+                checkpointer= InMemorySaver(),
+                mcptools=mcp_tools
+            )
 
-        logger.debug("Agent 实例创建成功")
-    return _agent_instance
+            logger.debug("Agent 实例创建成功")
+        return _agent_instance
 
 
 def generate_completion_id() -> str:

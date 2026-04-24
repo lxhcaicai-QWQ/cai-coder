@@ -75,7 +75,10 @@ class HeartbeatService:
         response = self.agent.invoke(
             {"messages": [{"role": "user", "content": f"Review the following HEARTBEAT.md and decide whether there are active tasks.\n\n{content}"}]}
         )
-        return response['structured_response']
+        result = response.get('structured_response')
+        if result is None:
+            raise ValueError("Heartbeat agent did not return structured_response")
+        return result
 
     def start(self) -> None:
         """Start scheduled heartbeat task"""
@@ -104,6 +107,7 @@ class HeartbeatService:
         content = self._read_heartbeat_file()
         if not content:
             log.debug("HEARTBEAT.md missing or empty")
+            return
 
         log.info("Heartbeat: checking for tasks...")
 

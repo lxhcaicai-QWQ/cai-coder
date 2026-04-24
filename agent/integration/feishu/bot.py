@@ -2,6 +2,7 @@ import datetime
 import json
 import queue
 import random
+from collections import OrderedDict
 from typing import Dict
 
 from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody, ReplyMessageRequest, \
@@ -44,7 +45,8 @@ class FeishuChannel(BaseChannel):
         # 验证配置
         FeishuBotConfig.validate()
 
-        self.task_db = set()
+        self.task_db: OrderedDict[str, None] = OrderedDict()
+        self._task_db_max_size = 10000
 
         # 会话过期时间
         self.session_timeout = FeishuBotConfig.SESSION_TIMEOUT
@@ -154,7 +156,9 @@ class FeishuChannel(BaseChannel):
                 }
             )
 
-            self.task_db.add(message_id)
+            self.task_db[message_id] = None
+            if len(self.task_db) > self._task_db_max_size:
+                self.task_db.popitem(last=False)
 
         except Exception as e:
             self.logger.error(f"处理消息时出错: {e}")
