@@ -1,9 +1,12 @@
+import json
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
 
+from agent.utils.common_util import ensure_dir
 from agent.utils.logger import get_logger
 
 log = get_logger("cron_service")
@@ -16,12 +19,45 @@ class CronSchedule:
     every_ms: int = 0  # interval in milliseconds for periodic execution
     at_ms: int = 0  # absolute timestamp (in milliseconds) for one-time execution
 
+    def to_dict(self) -> dict:
+        return {
+            "kind": self.kind,
+            "every_ms": self.every_ms,
+            "at_ms": self.at_ms,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "CronSchedule":
+        return cls(
+            kind=data["kind"],
+            every_ms=data.get("every_ms", 0),
+            at_ms=data.get("at_ms", 0),
+        )
+
 @dataclass
 class CronJobState:
     next_run_at_ms: int | None = None
     last_run_at_ms: int | None = None
     last_status: str | None = None
     last_error: str | None = None
+
+    def to_dict(self) -> dict:
+        return {
+            "next_run_at_ms": self.next_run_at_ms,
+            "last_run_at_ms": self.last_run_at_ms,
+            "last_status": self.last_status,
+            "last_error": self.last_error,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "CronJobState":
+        return cls(
+            next_run_at_ms=data.get("next_run_at_ms"),
+            last_run_at_ms=data.get("last_run_at_ms"),
+            last_status=data.get("last_status"),
+            last_error=data.get("last_error"),
+        )
+
 
 @dataclass
 class CronJob:
@@ -31,6 +67,27 @@ class CronJob:
     schedule: CronSchedule = field(default_factory=CronSchedule)
     state: CronJobState = field(default_factory=CronJobState)
     payload: Any = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "enabled": self.enabled,
+            "schedule": self.schedule.to_dict(),
+            "state": self.state.to_dict(),
+            "payload": self.payload,  # 注意：payload 需要自行确保可序列化
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "CronJob":
+        return cls(
+            id=data.get("id", str(uuid.uuid4())[:8]),
+            name=data.get("name", ""),
+            enabled=data.get("enabled", True),
+            schedule=CronSchedule.from_dict(data.get("schedule", {})),
+            state=CronJobState.from_dict(data.get("state", {})),
+            payload=data.get("payload"),
+        )
 
 
 def _now_ms() -> int:
@@ -52,9 +109,12 @@ class CronService:
 
     def __init__(
             self,
+            workspace: Path,
             on_job: Callable[[CronJob], None] | None = None,
             max_sleep_ms: int = 300_000
     ):
+        self.workspace = workspace
+        self.cron_dir = ensure_dir(self.workspace / "cron")
         self.on_job = on_job
         self.max_sleep_ms = max_sleep_ms
 
@@ -65,12 +125,32 @@ class CronService:
         self._running = False
         self._thread: threading.Thread | None = None
 
+
+    def _get_corn_job_path(self):
+        return self.cron_dir / "cron.json"
+
+    def _load(self) -> list[CronJob]:
+        cron_path = self._get_corn_job_path()
+
+        if not cron_path.exists():
+            return []
+
+        try:
+            with open(cron_path, encoding="utf-8") as f:
+                body = f.read() or "[]"
+            raw: list[Any] = json.loads(body)
+        except Exception as e:
+            log.warning(f"Failed to read corn job path {cron_path}: {e}")
+            return []
+
+        return [CronJob.from_dict(v) for v in raw]
+
     def start(self):
         """Start background scheduled thread"""
         if self._running:
             return
         self._running = True
-
+        self._jobs = self._load()
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
         log.info("Cron service started.")
@@ -153,6 +233,13 @@ class CronService:
             ]
             return min(times) if times else None
 
+    def _save(self) -> None:
+        corn_path = self._get_corn_job_path()
+        with self._lock:
+            joblist = [item.to_dict() for item in self._jobs]
+            data = json.dumps(joblist,ensure_ascii=False, indent=2)
+            with open(corn_path, 'w', encoding='utf-8') as f:
+                f.write(data)
 
     # ========== 公开的增删改查 API ==========
     def add_job(self, name: str, schedule: CronSchedule, payload: Any=None) -> CronJob:
@@ -169,6 +256,7 @@ class CronService:
         # 【关键修复】加锁修改列表，并 notify 唤醒后台线程
         with self._condition:
             self._jobs.append(job)
+            self._save()
             self._condition.notify()
 
         return job
@@ -180,6 +268,7 @@ class CronService:
             self._jobs = [job for job in self._jobs if job.id != job_id]
             changed = len(self._jobs) < before_len
             if changed:
+                self._save()
                 self._condition.notify()
             return changed
 

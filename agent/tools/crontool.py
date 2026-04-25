@@ -1,4 +1,5 @@
 import uuid
+from pathlib import Path
 from typing import Literal
 
 from langgraph.checkpoint.memory import InMemorySaver
@@ -11,6 +12,7 @@ from agent.cron import CronService, CronJob, CronSchedule
 from langchain_core.tools import tool
 
 from agent.subagents import get_sub_agent
+from agent.utils.common_util import get_working_dir
 from agent.utils.logger import get_logger
 
 log = get_logger("cron_tool")
@@ -61,7 +63,7 @@ def push_message(job:CronJob):
     )
     global_message_bus.publish_outbound(out_message)
 
-_service = CronService(on_job=push_message)
+_service = CronService(on_job=push_message,workspace=Path(get_working_dir()))
 
 @tool
 def add_cronjob(
