@@ -23,7 +23,16 @@ from .tools import (
     bash,
     http_request,
     http_get,
-    http_post, add_cronjob, send_im_messages
+    http_post, add_cronjob, send_im_messages,
+    save_user_fact,
+    save_preference,
+    save_lesson_learned,
+    save_decision,
+    save_project_background,
+    save_knowledge,
+    save_journal_entry,
+    save_glossary_term,
+    append_session_summary,
 )
 from .prompt import construct_system_prompt
 from .utils.logger import get_logger
@@ -53,7 +62,7 @@ def _build_llm() -> ChatOpenAI:
         temperature=0.7,
     )
 
-def get_agent(checkpointer: Checkpointer = InMemorySaver(), mcptools: list[BaseTool] = None):
+def get_agent(checkpointer: Checkpointer = InMemorySaver(), mcptools: list[BaseTool] = None, memory_manager=None):
     logger.debug("正在创建 Agent 实例...")
 
     agent_tools = [
@@ -66,7 +75,16 @@ def get_agent(checkpointer: Checkpointer = InMemorySaver(), mcptools: list[BaseT
         http_get,
         http_post,
         add_cronjob,
-        send_im_messages
+        send_im_messages,
+        save_user_fact,
+        save_preference,
+        save_lesson_learned,
+        save_decision,
+        save_project_background,
+        save_knowledge,
+        save_journal_entry,
+        save_glossary_term,
+        append_session_summary,
     ]
 
     if mcptools:
@@ -75,13 +93,15 @@ def get_agent(checkpointer: Checkpointer = InMemorySaver(), mcptools: list[BaseT
 
     logger.debug(f"Agent 工具总数: {len(agent_tools)}")
 
-    agent = create_agent(
-        model=_build_llm(),
-        system_prompt=construct_system_prompt(),
-        tools=agent_tools,
-        middleware=[
-            SkillMiddleware(),
-            TodoListMiddleware(),
+    middleware_list = [SkillMiddleware()]
+
+    if memory_manager:
+        from agent.memory import MemoryMiddleware
+        middleware_list.append(MemoryMiddleware(memory_manager))
+        logger.debug("MemoryMiddleware added to agent")
+
+    middleware_list.extend([
+        TodoListMiddleware(),
             ToolRetryMiddleware(
                 max_retries=3,
                 initial_delay=1.0,  # 第一次重试前的初始延迟（以秒为单位）
@@ -110,7 +130,13 @@ def get_agent(checkpointer: Checkpointer = InMemorySaver(), mcptools: list[BaseT
                     )
                 ]
             )
-        ],
+    ])
+
+    agent = create_agent(
+        model=_build_llm(),
+        system_prompt=construct_system_prompt(),
+        tools=agent_tools,
+        middleware=middleware_list,
         checkpointer=checkpointer
     )
 
@@ -124,11 +150,12 @@ class AgentLoop:
             self,bus: MessageBus,
             session_manager: SessionManager=None,
             checkpoint: Checkpointer = InMemorySaver(),
-            max_workers: int = 4
+            max_workers: int = 4,
+            memory_manager=None
     ):
         self.bus = bus
         self.session_manager = session_manager
-        self.agent = get_agent(checkpointer=checkpoint)
+        self.agent = get_agent(checkpointer=checkpoint, memory_manager=memory_manager)
         self._running = False
         self._thread = threading.Thread(target=self.run, daemon=True)
         self.max_workers = max_workers

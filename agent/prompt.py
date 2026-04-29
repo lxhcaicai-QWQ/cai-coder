@@ -80,6 +80,19 @@ GIT_USE_SECTION = """
 
 """
 
+MEMORY_INSTRUCTION_SECTION = """
+
+    ## Long-Term Memory
+    You have access to long-term memory tools. Use them proactively:
+    - When the user shares personal details, preferences, or constraints, save them using `save_user_fact` or `save_preference`.
+    - When you solve a difficult problem or learn from a mistake, record it with `save_lesson_learned`.
+    - When an important technical decision is made, use `save_decision`.
+    - When starting a new project, use `save_project_background`.
+    - At the end of significant sessions, use `append_session_summary`.
+    - Relevant memory context is automatically loaded into your context. Apply it naturally without mentioning the memory system.
+
+"""
+
 IM_MESSAGE_DISPATCHING_POLICY = """
 
     ## IM Message Dispatching Policy
@@ -112,6 +125,7 @@ SYSTEM_PROMPT= (
     + TOOL_USAGE_SECTION
     + GIT_USE_SECTION
     + IM_MESSAGE_DISPATCHING_POLICY
+    + MEMORY_INSTRUCTION_SECTION
 )
 
 def construct_system_prompt():

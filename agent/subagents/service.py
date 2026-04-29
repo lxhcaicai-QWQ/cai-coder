@@ -21,7 +21,7 @@ def _build_llm() -> ChatOpenAI:
         temperature=0.7,
     )
 
-def get_sub_agent(sys_prompt:str, checkpointer: Checkpointer = InMemorySaver(), mcptools: list[BaseTool] = None):
+def get_sub_agent(sys_prompt:str, checkpointer: Checkpointer = InMemorySaver(), mcptools: list[BaseTool] = None, memory_manager=None):
 
     # Deferred import to avoid circular dependencies
     from agent.tools import get_weather, read_file, write_file, ls, bash, http_request, http_get, http_post
@@ -45,14 +45,16 @@ def get_sub_agent(sys_prompt:str, checkpointer: Checkpointer = InMemorySaver(), 
 
     log.debug(f"SubAgent 工具总数: {len(agent_tools)}")
 
+    middleware_list = [SkillMiddleware(), TodoListMiddleware()]
+    if memory_manager:
+        from agent.memory import MemoryMiddleware
+        middleware_list.append(MemoryMiddleware(memory_manager))
+
     agent = create_agent(
         model=_build_llm(),
         system_prompt=sys_prompt,
         tools=agent_tools,
-        middleware=[
-            SkillMiddleware(),
-            TodoListMiddleware(),
-        ],
+        middleware=middleware_list,
         checkpointer=checkpointer
     )
 
