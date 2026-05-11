@@ -21,13 +21,14 @@
 
 ## 项目简介
 
-**cai-coder** 是一个基于 **Python**、**LangChain** 和 **LangGraph** 构建的 AI 编程助手 Agent。它采用独特的 **渐进式技能加载** 机制——Agent 默认保持轻量的基础状态，只有在用户触发特定需求时才动态加载专业技能，兼顾了效率与灵活性。同时具备 **三层长期记忆系统**，可跨会话持久化用户偏好、经验教训和领域知识。还支持 **MCP (Model Context Protocol)** 工具集成，可无缝扩展 Agent 能力，通过 FastAPI 提供 **OpenAI 兼容的 Web API** 接口，集成了 **飞书机器人** 支持在群聊中直接使用 AI 编程助手，提供了 **心跳服务** 用于周期性任务执行、**定时任务服务** 用于计划任务调度、**子代理服务** 用于创建隔离的 Agent 实例，以及 **会话管理器** 用于跨通道的会话追踪。
+**cai-coder** 是一个基于 **Python**、**LangChain** 和 **LangGraph** 构建的 AI 编程助手 Agent。它采用独特的 **渐进式技能加载** 机制——Agent 默认保持轻量的基础状态，只有在用户触发特定需求时才动态加载专业技能，兼顾了效率与灵活性。同时具备 **多智能体调度系统**，通过 LLM 分类将任务路由到专业子代理（代码审查、Bug 修复、DevOps 等），以及 **三层长期记忆系统**，可跨会话持久化用户偏好、经验教训和领域知识。还支持 **MCP (Model Context Protocol)** 工具集成，可无缝扩展 Agent 能力，通过 FastAPI 提供 **OpenAI 兼容的 Web API** 接口，集成了 **飞书机器人** 支持在群聊中直接使用 AI 编程助手，提供了 **心跳服务** 用于周期性任务执行、**定时任务服务** 用于计划任务调度、**子代理服务** 用于创建隔离的 Agent 实例，以及 **会话管理器** 用于跨通道的会话追踪。
 
 ## 核心特性
 
 - **渐进式技能加载** — 根据用户意图按需加载技能，保持基础 Agent 的精简与高效。
+- **多智能体调度** — 基于 LLM 的任务路由器，将任务分派到专业代理（代码审查、Bug 修复、DevOps、通用），每个代理拥有独立的系统提示词和工具集。
 - **三层长期记忆系统** — L1（会话日志）、L2（滚动摘要）、L3（持久知识：用户画像、偏好、规则、术语表、决策、经验教训、日志）。
-- **丰富的内置工具集** — 支持文件读写、Shell 命令执行、HTTP 请求、天气查询、定时任务调度、IM 消息发送、记忆管理等操作。
+- **丰富的内置工具集** — 支持文件读写、Shell 命令执行、HTTP 请求、天气查询、定时任务调度、IM 消息发送、任务委派、记忆管理等操作。
 - **MCP 工具集成** — 通过 `mcp.json` 配置外部 MCP 服务器，扩展 Agent 能力。
 - **OpenAI 兼容 Web API** — 基于 FastAPI 的 HTTP 接口，支持流式（SSE）和非流式模式，完全兼容 OpenAI `/v1/chat/completions` 接口规范。
 - **飞书机器人** — 基于飞书长连接 WebSocket 的机器人，支持在飞书群聊中直接使用 AI 编程助手，支持图片和文件上传。
@@ -50,6 +51,7 @@
 用户输入 → Agent（基础状态）
             ├── 话题匹配某个技能？ → 加载 SKILL.md → 以专业视角回答
             ├── 话题结束？         → 卸载技能 → 回到基础状态
+            ├── 任务需要专家？     → delegate_agent → 调度器 → 专业代理
             ├── 记忆相关？         → MemoryMiddleware 注入上下文 → 使用长期记忆
             └── 没有匹配？         → 作为通用助手回答
 ```
@@ -77,6 +79,7 @@
 | `get_weather` | 查询指定位置的天气 |
 | `add_cronjob` | 创建定时任务（一次性或周期性），并将结果推送到指定通道 |
 | `send_im_messages` | 向 IM 通道（飞书）发送消息，支持媒体附件 |
+| `delegate_agent` | 将任务委派给专业子代理（自动路由或手动选择） |
 | `load_skill` | 按需加载技能的完整指令 |
 | `save_user_fact` | 保存用户信息到长期记忆画像 |
 | `save_preference` | 保存用户偏好到长期记忆 |
@@ -339,6 +342,39 @@ add_cronjob 工具 → CronService.add_job() → CronJob（后台线程）
 - **`get_sub_agent()`**（`agent/subagents/service.py`）：创建独立的 Agent 实例，包含自定义系统提示词、`InMemorySaver` 检查点存储、内置工具（天气、文件 I/O、Shell、HTTP）、可选的 MCP 工具，以及精简的中间件栈（`SkillMiddleware`、`TodoListMiddleware`）。
 - **`get_memory_agent()`**（`agent/subagents/service.py`）：创建仅包含记忆工具（9 个工具）的轻量 Agent，用于后台摘要任务。被 `ConversationSummarizerMiddleware` 使用。
 
+## 多智能体调度系统
+
+cai-coder 内置了**多智能体调度系统**（`agent/multi_agent/`），通过基于 LLM 的分类将任务路由到专业子代理。
+
+### 架构
+
+```
+主 Agent → delegate_agent 工具 → AgentDispatcher.classify_task() → LLM 路由
+                                         │
+                     ┌───────────────────┼───────────────────┐
+                     │                   │                   │
+               code-review          bug-fix              devops / general
+               (read, bash)    (read, write, bash)    (bash, read, write)
+```
+
+### 组件
+
+- **`AgentRegistry`**（`agent/multi_agent/registry.py`）：管理 `AgentDefinition` 实例，每个代理定义包含唯一名称、描述、系统提示词和工具集。内置 4 个默认代理：
+  - `code-review` — 代码审查、PR 分析、安全审计
+  - `bug-fix` — Bug 诊断、根因分析、修复
+  - `devops` — 部署、Docker、CI/CD、基础设施
+  - `general` — 通用编程问题和任务
+
+- **`AgentFactory`**（`agent/multi_agent/factory.py`）：根据 `AgentDefinition` 构建 LangGraph `create_react_agent` 实例。解析工具名称为实际工具对象，缓存已构建的代理以复用。
+
+- **`AgentDispatcher`**（`agent/multi_agent/dispatcher.py`）：使用共享 LLM 对任务进行分类，并路由到最合适的代理。分类不确定时回退到 `general`。
+
+- **`delegate_agent` 工具**（`agent/tools/delegate_agent.py`）：LangChain `BaseTool`，将多智能体调度能力暴露给主 Agent。支持自动路由（调度器选择代理）和手动选择（指定代理名称）。
+
+### 初始化
+
+多智能体系统在 `server.py` 中通过 `_init_multi_agent(llm)` 初始化，创建 `AgentFactory`、`AgentDispatcher`，并连接 `delegate_agent` 工具。已构建的代理会被缓存复用。
+
 ## 飞书机器人
 
 cai-coder 内置了**飞书（Lark）长连接 WebSocket 通道**，实现了 `BaseChannel` 接口，用户可以在飞书群聊中直接与 AI Agent 交互。
@@ -441,6 +477,11 @@ cai-coder/
 │   │   ├── __init__.py           #   中间件导出
 │   │   ├── skill_middleware.py   #   SkillMiddleware — 渐进式技能加载
 │   │   └── conversation_middleware.py  # ConversationSummarizerMiddleware — 后台会话摘要
+│   ├── multi_agent/              # 多智能体调度系统
+│   │   ├── __init__.py           #   导出 AgentRegistry、AgentFactory、AgentDispatcher
+│   │   ├── registry.py           #   AgentDefinition + AgentRegistry（code-review、bug-fix、devops、general）
+│   │   ├── factory.py            #   AgentFactory — 根据定义构建 LangGraph 代理
+│   │   └── dispatcher.py         #   AgentDispatcher — 基于 LLM 的任务路由
 │   ├── subagents/                # 子代理工厂（创建隔离的 Agent 实例）
 │   │   ├── __init__.py           #   导出 get_sub_agent
 │   │   └── service.py            #   get_sub_agent、get_memory_agent
@@ -451,6 +492,7 @@ cai-coder/
 │   │   ├── get_weather.py
 │   │   ├── http_request.py       #   http_request、http_get、http_post
 │   │   ├── im.py                 #   send_im_messages — IM 通道消息发送
+│   │   ├── delegate_agent.py     #   delegate_agent — 任务委派到专业代理
 │   │   ├── memory_tools.py       #   长期记忆工具（9 个工具）
 │   │   ├── ls.py
 │   │   ├── read_file.py
@@ -493,6 +535,10 @@ cai-coder/
 │   ├── test_agent_mcp.py
 │   ├── test_cron.py              #   定时任务服务测试
 │   ├── test_feishu_channel.py
+│   ├── test_heartbeat.py
+│   ├── test_http_request.py
+│   ├── test_memory.py            #   长期记忆测试
+│   ├── test_multi_agent.py       #   多智能体调度测试
 │   ├── test_heartbeat.py
 │   ├── test_http_request.py
 │   ├── test_session_manager.py
@@ -542,6 +588,15 @@ AgentLoop ──publish_outbound──> MessageBus.outbound ──consume──>
 - **L3 — 持久知识**（`long-term/`）：结构化知识——画像、偏好、规则、术语表、项目、知识库、决策、经验教训、日志。
 - **`MemoryMiddleware`**：将 L3 上下文注入系统提示词。
 - **`ConversationSummarizerMiddleware`**：后台提取对话关键信息并保存到长期记忆。
+
+### 多智能体调度
+
+基于 LLM 的任务路由系统，将任务委派给专业代理：
+
+- **`AgentRegistry`**：管理 `AgentDefinition` 条目（名称、描述、系统提示词、工具）。默认代理：`code-review`、`bug-fix`、`devops`、`general`。
+- **`AgentFactory`**：根据定义构建 LangGraph 代理，支持工具解析和缓存。
+- **`AgentDispatcher`**：通过 LLM 分类任务并路由到最佳代理，不确定时回退到 `general`。
+- **`delegate_agent` 工具**：暴露给主 Agent，支持按需任务委派。
 
 ### 定时任务服务
 
@@ -642,6 +697,12 @@ Agent 的详细执行指南...
 
 1. 实现 LangChain 的 `AgentMiddleware`
 2. 在 `agent/server.py` 的中间件列表中添加
+
+### 注册新的专业代理
+
+1. 定义 `AgentDefinition`，包含名称、描述、系统提示词和工具列表
+2. 在 `agent/multi_agent/registry.py` 中调用 `agent_registry.register(definition)`
+3. 新代理将通过 `delegate_agent` 工具可用于自动路由
 
 ### 添加 MCP 服务器
 

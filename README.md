@@ -21,13 +21,14 @@
 
 ## What is cai-coder?
 
-**cai-coder** is an AI-powered coding agent built with **Python**, **LangChain**, and **LangGraph**. It features a unique **progressive skill-loading** mechanism that keeps the agent lightweight by default, only loading specialized capabilities when needed, and a **three-layer long-term memory system** that persists knowledge, user preferences, and lessons learned across sessions. It also supports **MCP (Model Context Protocol)** tool integration for seamless extension, provides an **OpenAI-compatible Web API** via FastAPI, includes a **Feishu (Lark) bot integration** for chat-based interaction, a **heartbeat service** for periodic task execution, a **cron service** for scheduled task execution, a **sub-agent service** for spawning isolated agent instances, and a **session manager** for tracking conversations across channels.
+**cai-coder** is an AI-powered coding agent built with **Python**, **LangChain**, and **LangGraph**. It features a unique **progressive skill-loading** mechanism that keeps the agent lightweight by default, only loading specialized capabilities when needed, a **multi-agent dispatching system** that routes tasks to specialized sub-agents (code review, bug fix, DevOps, etc.) via LLM-based classification, and a **three-layer long-term memory system** that persists knowledge, user preferences, and lessons learned across sessions. It also supports **MCP (Model Context Protocol)** tool integration for seamless extension, provides an **OpenAI-compatible Web API** via FastAPI, includes a **Feishu (Lark) bot integration** for chat-based interaction, a **heartbeat service** for periodic task execution, a **cron service** for scheduled task execution, a **sub-agent service** for spawning isolated agent instances, and a **session manager** for tracking conversations across channels.
 
 ## Key Features
 
 - **Progressive Skill Loading** — Skills are loaded on-demand based on user intent, keeping the base agent lean and efficient.
+- **Multi-Agent Dispatching** — LLM-based task router dispatches tasks to specialized agents (code review, bug fix, DevOps, general), each with its own system prompt and tool set.
 - **Three-Layer Long-Term Memory** — L1 (session logs), L2 (rolling summaries), L3 (persistent knowledge: profile, preferences, rules, glossary, decisions, lessons, journal).
-- **Built-in Toolset** — File I/O, shell execution, HTTP requests, weather queries, cron scheduling, IM messaging, memory management, and more.
+- **Built-in Toolset** — File I/O, shell execution, HTTP requests, weather queries, cron scheduling, IM messaging, memory management, task delegation, and more.
 - **MCP Tool Integration** — Connect external MCP servers to extend agent capabilities via `mcp.json`.
 - **OpenAI-Compatible Web API** — FastAPI-powered HTTP API with streaming (SSE) and non-streaming modes, compatible with the OpenAI `/v1/chat/completions` interface.
 - **Feishu (Lark) Bot** — Long-connection WebSocket bot for Feishu, enabling chat-based AI coding assistance directly in Feishu groups. Supports media (images, files) upload.
@@ -50,6 +51,7 @@
 User Input → Agent (Base State)
                ├── Topic matches a skill? → Load SKILL.md → Respond with expertise
                ├── Topic ends?            → Unload skill → Return to base state
+               ├── Task needs specialist? → delegate_agent → Dispatcher → Specialized Agent
                ├── Memory relevant?       → MemoryMiddleware injects context → Use long-term memory
                └── No match?              → Respond as general assistant
 ```
@@ -77,6 +79,7 @@ User Input → Agent (Base State)
 | `get_weather` | Get weather for a location |
 | `add_cronjob` | Create scheduled tasks (one-time or periodic) and push results to channels |
 | `send_im_messages` | Send messages to IM channels (Feishu) with media support |
+| `delegate_agent` | Delegate a task to a specialized sub-agent (auto-routing or manual selection) |
 | `load_skill` | Load a skill's full instructions on demand |
 | `save_user_fact` | Save a fact about the user to long-term memory profile |
 | `save_preference` | Save a user preference to long-term memory |
@@ -340,6 +343,39 @@ The sub-agent service (`agent/subagents/`) provides factories for creating light
 - **`get_sub_agent()`** (`agent/subagents/service.py`): Creates a standalone agent with a custom system prompt, `InMemorySaver` checkpointer, built-in tools (weather, file I/O, shell, HTTP), optional MCP tools, and a reduced middleware stack (`SkillMiddleware`, `TodoListMiddleware`).
 - **`get_memory_agent()`** (`agent/subagents/service.py`): Creates a lightweight agent with only memory tools (9 tools) for background summarization tasks. Used by `ConversationSummarizerMiddleware`.
 
+## Multi-Agent Dispatching System
+
+cai-coder includes a **multi-agent dispatching system** (`agent/multi_agent/`) that routes tasks to specialized sub-agents via LLM-based classification.
+
+### Architecture
+
+```
+Main Agent → delegate_agent tool → AgentDispatcher.classify_task() → LLM routing
+                                         │
+                     ┌───────────────────┼───────────────────┐
+                     │                   │                   │
+               code-review          bug-fix              devops / general
+               (read, bash)    (read, write, bash)    (bash, read, write)
+```
+
+### Components
+
+- **`AgentRegistry`** (`agent/multi_agent/registry.py`): Registry of `AgentDefinition` instances, each with a unique name, description, system prompt, and tool set. Ships with 4 default agents:
+  - `code-review` — Code review, PR analysis, security audit
+  - `bug-fix` — Bug diagnosis, root cause analysis, fixing
+  - `devops` — Deployment, Docker, CI/CD, infrastructure
+  - `general` — General coding questions and tasks
+
+- **`AgentFactory`** (`agent/multi_agent/factory.py`): Builds LangGraph `create_react_agent` instances from `AgentDefinition` entries. Resolves tool names to actual tool objects, caches built agents for reuse.
+
+- **`AgentDispatcher`** (`agent/multi_agent/dispatcher.py`): Uses the shared LLM to classify incoming tasks and route them to the most appropriate agent. Falls back to `general` if classification is uncertain.
+
+- **`delegate_agent` tool** (`agent/tools/delegate_agent.py`): LangChain `BaseTool` that exposes multi-agent dispatching to the main agent. Supports both auto-routing (dispatcher selects agent) and manual selection (agent name specified).
+
+### Initialization
+
+The multi-agent system is initialized in `server.py` via `_init_multi_agent(llm)`, which creates the `AgentFactory`, `AgentDispatcher`, and wires up the `delegate_agent` tool. Built agents are cached for reuse.
+
 ## Feishu Bot
 
 cai-coder includes a **Feishu (Lark) long-connection WebSocket channel** implementing the `BaseChannel` interface, allowing users to interact with the AI agent directly in Feishu group chats.
@@ -442,6 +478,11 @@ cai-coder/
 │   │   ├── __init__.py           #   Middleware exports
 │   │   ├── skill_middleware.py   #   SkillMiddleware — progressive skill loading
 │   │   └── conversation_middleware.py  # ConversationSummarizerMiddleware — background summarization
+│   ├── multi_agent/              # Multi-agent dispatching system
+│   │   ├── __init__.py           #   Exports AgentRegistry, AgentFactory, AgentDispatcher
+│   │   ├── registry.py           #   AgentDefinition + AgentRegistry (code-review, bug-fix, devops, general)
+│   │   ├── factory.py            #   AgentFactory — builds LangGraph agents from definitions
+│   │   └── dispatcher.py         #   AgentDispatcher — LLM-based task routing
 │   ├── subagents/                # Sub-agent factory for isolated agent instances
 │   │   ├── __init__.py           #   Exports get_sub_agent
 │   │   └── service.py            #   get_sub_agent, get_memory_agent
@@ -452,6 +493,7 @@ cai-coder/
 │   │   ├── get_weather.py
 │   │   ├── http_request.py       #   http_request, http_get, http_post
 │   │   ├── im.py                 #   send_im_messages — IM channel messaging
+│   │   ├── delegate_agent.py     #   delegate_agent — task delegation to specialized agents
 │   │   ├── memory_tools.py       #   Long-term memory tools (9 tools)
 │   │   ├── ls.py
 │   │   ├── read_file.py
@@ -495,6 +537,10 @@ cai-coder/
 │   ├── test_agent_mcp.py
 │   ├── test_cron.py              #   Cron service tests
 │   ├── test_feishu_channel.py
+│   ├── test_heartbeat.py
+│   ├── test_http_request.py
+│   ├── test_memory.py            #   Long-term memory tests
+│   ├── test_multi_agent.py       #   Multi-agent dispatching tests
 │   ├── test_heartbeat.py
 │   ├── test_http_request.py
 │   ├── test_session_manager.py
@@ -544,6 +590,15 @@ A three-layer memory architecture:
 - **L3 — Persistent Knowledge** (`long-term/`): Structured knowledge — profile, preferences, rules, glossary, projects, knowledge, decisions, lessons, journal.
 - **`MemoryMiddleware`**: Injects L3 context into the system prompt.
 - **`ConversationSummarizerMiddleware`**: Background extraction of key conversation info into long-term memory.
+
+### Multi-Agent Dispatching
+
+An LLM-based task routing system that delegates to specialized agents:
+
+- **`AgentRegistry`**: Manages `AgentDefinition` entries (name, description, system prompt, tools). Default agents: `code-review`, `bug-fix`, `devops`, `general`.
+- **`AgentFactory`**: Builds LangGraph agents from definitions with tool resolution and caching.
+- **`AgentDispatcher`**: Classifies tasks via LLM and routes to the best agent. Falls back to `general`.
+- **`delegate_agent` tool**: Exposed to the main agent for on-demand task delegation.
 
 ### Cron Service
 
@@ -644,6 +699,12 @@ Detailed instructions for the agent...
 
 1. Implement `AgentMiddleware` from LangChain
 2. Add it to the middleware list in `agent/server.py`
+
+### Register a New Specialized Agent
+
+1. Define an `AgentDefinition` with name, description, system prompt, and tool list
+2. Call `agent_registry.register(definition)` in `agent/multi_agent/registry.py`
+3. The new agent will be available for auto-routing via `delegate_agent`
 
 ### Add an MCP Server
 
